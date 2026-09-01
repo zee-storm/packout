@@ -52,15 +52,15 @@
 :root{
   /* --- ground: dawn --- */
   --ground-0:#E9EEF3;
-  --wash-a:rgba(6,113,143,.16);
-  --wash-b:rgba(58,78,190,.09);
-  --wash-c:rgba(222,128,58,.13);
+  --wash-a:rgba(6,124,156,.26);
+  --wash-b:rgba(58,78,190,.15);
+  --wash-c:rgba(226,132,54,.22);
 
   /* --- materials --- */
-  --glass:rgba(255,255,255,.58);
-  --glass-2:rgba(255,255,255,.78);
-  --glass-3:rgba(255,255,255,.34);
-  --chrome:rgba(250,252,254,.72);
+  --glass:rgba(255,255,255,.50);
+  --glass-2:rgba(255,255,255,.72);
+  --glass-3:rgba(255,255,255,.30);
+  --chrome:rgba(250,252,254,.68);
   --glass-line:rgba(14,32,48,.11);
   --glass-line-2:rgba(14,32,48,.07);
   --sheen:rgba(255,255,255,.85);
@@ -290,9 +290,16 @@ button{font-family:inherit;color:inherit}
 .card-pad{padding:16px}
 .card-hd{
   padding:13px 16px;border-bottom:1px solid var(--glass-line-2);
-  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  display:flex;align-items:center;justify-content:space-between;
+  gap:8px 10px;flex-wrap:wrap;
 }
-.card-hd h3{margin:0;font-family:var(--f-display);font-size:16px;font-weight:600;letter-spacing:-.018em}
+/* The title keeps the line; a long pill beside it drops underneath rather
+   than squeezing a two-word heading into two ragged lines. */
+.card-hd h3{
+  margin:0;font-family:var(--f-display);font-size:16px;font-weight:600;
+  letter-spacing:-.018em;flex:1 1 auto;min-width:0;
+}
+.card-hd .pill{flex:0 1 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis}
 
 .stripe{border-left:3px solid var(--glass-line)}
 .stripe-good{border-left-color:var(--good)}
@@ -483,7 +490,7 @@ p.note{margin:0;color:var(--muted);font-size:13.5px;line-height:1.5}
 .field input:focus,.field textarea:focus,.field select:focus,.inp:focus{
   outline:none;border-color:var(--accent);background:var(--glass-2);
 }
-.field textarea{min-height:80px;resize:vertical;line-height:1.5}
+.field textarea{min-height:106px;resize:vertical;line-height:1.5}
 .inp-sm{padding:12px 12px;font-size:15px;border-radius:var(--r-xs)}
 .field-money{position:relative}
 .field-money input{padding-left:32px}
