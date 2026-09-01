@@ -1,0 +1,2004 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#E9EEF2" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0B1116" media="(prefers-color-scheme: dark)">
+<title>PackOut</title>
+
+<!-- Installed to the home screen, this opens full screen with no address bar. -->
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" href="./favicon-32.png" sizes="32x32" type="image/png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="PackOut">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --ground:#E9EEF2;
+  --surface:#FFFFFF;
+  --surface-2:#F4F7F9;
+  --ink:#0E151B;
+  --ink-2:#3D4A57;
+  --muted:#67747F;
+  --line:#D2DBE2;
+  --line-2:#E2E9EE;
+  --accent:#06718F;
+  --accent-ink:#FFFFFF;
+  --accent-soft:#DCEEF4;
+  --good:#12724A;
+  --good-soft:#DBEFE4;
+  --warn:#9A5905;
+  --warn-soft:#F7E9D4;
+  --bad:#A82219;
+  --bad-soft:#F8DFDC;
+  --shadow:0 1px 2px rgba(14,21,27,.06), 0 6px 18px -8px rgba(14,21,27,.16);
+  --radius:10px;
+  --radius-sm:6px;
+  --f-ui:"Archivo", "Helvetica Neue", Arial, sans-serif;
+  --f-num:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0B1116;
+    --surface:#141C23;
+    --surface-2:#1B252D;
+    --ink:#E7EEF4;
+    --ink-2:#BCC9D4;
+    --muted:#8695A2;
+    --line:#27333D;
+    --line-2:#1F2A33;
+    --accent:#4FC3E3;
+    --accent-ink:#06222C;
+    --accent-soft:#12303B;
+    --good:#4CC287;
+    --good-soft:#122F22;
+    --warn:#E0A044;
+    --warn-soft:#33260F;
+    --bad:#F0817A;
+    --bad-soft:#361A18;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 22px -10px rgba(0,0,0,.6);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0B1116;
+  --surface:#141C23;
+  --surface-2:#1B252D;
+  --ink:#E7EEF4;
+  --ink-2:#BCC9D4;
+  --muted:#8695A2;
+  --line:#27333D;
+  --line-2:#1F2A33;
+  --accent:#4FC3E3;
+  --accent-ink:#06222C;
+  --accent-soft:#12303B;
+  --good:#4CC287;
+  --good-soft:#122F22;
+  --warn:#E0A044;
+  --warn-soft:#33260F;
+  --bad:#F0817A;
+  --bad-soft:#361A18;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 22px -10px rgba(0,0,0,.6);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:var(--f-ui);
+  font-size:15px;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  -webkit-text-size-adjust:100%;
+}
+button{font-family:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+.num{font-family:var(--f-num);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.lbl{
+  font-family:var(--f-num);
+  font-size:10px;
+  font-weight:500;
+  letter-spacing:.1em;
+  text-transform:uppercase;
+  color:var(--muted);
+}
+
+/* ---------- shell ---------- */
+.shell{max-width:520px;margin:0 auto;padding:0 0 96px}
+.shell.wide{max-width:980px}
+
+.topbar{
+  position:sticky;top:0;z-index:30;
+  background:var(--surface);
+  border-bottom:1px solid var(--line);
+}
+.topbar-in{
+  max-width:980px;margin:0 auto;
+  display:flex;align-items:center;gap:12px;
+  padding:10px 16px;
+}
+.brand{display:flex;align-items:baseline;gap:7px;margin-right:auto;min-width:0}
+.brand b{font-weight:800;letter-spacing:-.02em;font-size:17px}
+.brand span{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-family:var(--f-num)}
+
+.modesw{display:flex;background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:2px;gap:2px}
+.modesw button{
+  border:0;background:transparent;cursor:pointer;
+  font-size:12px;font-weight:600;padding:6px 13px;border-radius:999px;
+  color:var(--muted);white-space:nowrap;
+}
+.modesw button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+
+/* ---------- generic ---------- */
+.pad{padding:16px}
+.stack{display:flex;flex-direction:column;gap:14px}
+.stack-sm{display:flex;flex-direction:column;gap:8px}
+.row{display:flex;align-items:center;gap:10px}
+.row-b{display:flex;align-items:baseline;gap:10px}
+.spread{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.grow{flex:1;min-width:0}
+
+.card{
+  background:var(--surface);
+  border:1px solid var(--line);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.card-pad{padding:14px}
+.card-hd{
+  padding:11px 14px;
+  border-bottom:1px solid var(--line-2);
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+}
+.card-hd h3{margin:0;font-size:13px;font-weight:700;letter-spacing:-.01em}
+
+.stripe{border-left:3px solid var(--line)}
+.stripe-good{border-left-color:var(--good)}
+.stripe-warn{border-left-color:var(--warn)}
+.stripe-bad{border-left-color:var(--bad)}
+.stripe-live{border-left-color:var(--accent)}
+
+.pill{
+  display:inline-flex;align-items:center;gap:5px;
+  font-family:var(--f-num);font-size:10px;font-weight:600;
+  letter-spacing:.06em;text-transform:uppercase;
+  padding:3px 8px;border-radius:999px;
+  background:var(--surface-2);color:var(--muted);
+  border:1px solid var(--line-2);white-space:nowrap;
+}
+.pill-good{background:var(--good-soft);color:var(--good);border-color:transparent}
+.pill-warn{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.pill-bad{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.pill-live{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.pill-live .dot{animation:blip 1.6s ease-in-out infinite}
+@keyframes blip{0%,100%{opacity:1}50%{opacity:.25}}
+
+h1.page{margin:0;font-size:24px;font-weight:800;letter-spacing:-.03em;text-wrap:balance}
+h2.sec{margin:0;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+p.note{margin:0;color:var(--muted);font-size:13px}
+
+.big{font-family:var(--f-num);font-weight:600;font-size:34px;letter-spacing:-.035em;line-height:1;font-variant-numeric:tabular-nums}
+.mid{font-family:var(--f-num);font-weight:600;font-size:22px;letter-spacing:-.03em;line-height:1;font-variant-numeric:tabular-nums}
+
+.btn{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  width:100%;border:0;cursor:pointer;
+  background:var(--accent);color:var(--accent-ink);
+  font-size:15px;font-weight:700;letter-spacing:-.01em;
+  padding:16px;border-radius:var(--radius);
+  min-height:54px;
+}
+.btn:active{transform:translateY(1px)}
+/* Disabled has to stay opaque. This button floats over the page in the fixed
+   footer, so dimming it with opacity lets whatever is scrolling underneath
+   show straight through the label. */
+.btn[disabled]{
+  background:var(--surface-2);color:var(--muted);
+  cursor:not-allowed;box-shadow:none;
+}
+.btn[disabled]:active{transform:none}
+.btn-ghost{background:var(--surface);color:var(--ink);border:1px solid var(--line);box-shadow:var(--shadow)}
+.btn-quiet{background:transparent;color:var(--muted);border:1px solid var(--line);min-height:44px;font-size:13px;font-weight:600;padding:10px}
+.btn-sm{min-height:40px;padding:9px 14px;font-size:13px;width:auto}
+
+.sticky-foot{
+  position:fixed;left:0;right:0;bottom:0;z-index:40;
+  background:linear-gradient(to top, var(--ground) 62%, transparent);
+  padding:14px 16px calc(14px + env(safe-area-inset-bottom));
+}
+.sticky-foot-in{max-width:520px;margin:0 auto;display:flex;flex-direction:column;gap:8px}
+
+/* ---------- stepper ---------- */
+.step-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line-2)}
+.step-row:last-child{border-bottom:0}
+.step-name{font-weight:600;font-size:14px;letter-spacing:-.01em}
+.step-sub{font-size:11px;color:var(--muted);font-family:var(--f-num)}
+.stepper{display:flex;align-items:center;gap:2px;flex:none}
+.stepper button{
+  width:42px;height:42px;border:1px solid var(--line);background:var(--surface-2);
+  font-size:20px;font-weight:600;cursor:pointer;color:var(--ink);
+  display:flex;align-items:center;justify-content:center;
+}
+.stepper button:first-child{border-radius:8px 0 0 8px}
+.stepper button:last-child{border-radius:0 8px 8px 0}
+.stepper input{
+  width:58px;height:42px;text-align:center;border:1px solid var(--line);border-left:0;border-right:0;
+  background:var(--surface);color:var(--ink);
+  font-family:var(--f-num);font-weight:600;font-size:17px;font-variant-numeric:tabular-nums;
+  -moz-appearance:textfield;
+}
+.stepper input::-webkit-outer-spin-button,.stepper input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+
+/* ---------- tap buttons ---------- */
+.tap{
+  position:relative;width:100%;border:1px solid var(--line);
+  background:var(--surface);color:var(--ink);
+  border-radius:var(--radius);padding:16px 18px;cursor:pointer;
+  display:flex;align-items:center;justify-content:space-between;gap:14px;
+  min-height:96px;text-align:left;box-shadow:var(--shadow);
+  touch-action:manipulation;-webkit-tap-highlight-color:transparent;
+}
+.tap:active{background:var(--accent-soft);border-color:var(--accent)}
+.tap-name{font-size:18px;font-weight:700;letter-spacing:-.02em;line-height:1.2}
+.tap-left{font-family:var(--f-num);font-size:11px;color:var(--muted);margin-top:5px}
+.tap-count{font-family:var(--f-num);font-size:40px;font-weight:600;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+.tap-out{
+  position:absolute;inset:0;border-radius:var(--radius);
+  background:var(--bad-soft);color:var(--bad);
+  display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:15px;letter-spacing:.02em;
+}
+
+.ticker{
+  display:grid;grid-template-columns:1fr 1fr 1fr;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  box-shadow:var(--shadow);overflow:hidden;
+}
+.ticker div{padding:11px 12px;border-right:1px solid var(--line-2)}
+.ticker div:last-child{border-right:0}
+.ticker .mid{margin-top:3px}
+
+/* ---------- key/value list ---------- */
+.kv{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line-2)}
+.kv:last-child{border-bottom:0}
+.kv-k{font-size:13px;color:var(--ink-2)}
+.kv-v{font-family:var(--f-num);font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.kv-total{border-top:1px solid var(--line);border-bottom:0;margin-top:4px;padding-top:12px}
+.kv-total .kv-k{font-weight:700;font-size:14px;color:var(--ink)}
+.kv-total .kv-v{font-size:19px}
+
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{
+  font-family:var(--f-num);font-size:11px;font-weight:500;
+  padding:3px 7px;border-radius:var(--radius-sm);
+  background:var(--surface-2);color:var(--ink-2);border:1px solid var(--line-2);
+  font-variant-numeric:tabular-nums;
+}
+.chip-hi{background:var(--accent-soft);color:var(--accent);border-color:transparent;font-weight:600}
+
+.field{display:flex;flex-direction:column;gap:6px}
+.field input, .field textarea, .field select{
+  width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:var(--radius-sm);
+  background:var(--surface);color:var(--ink);font-size:16px;font-family:var(--f-num);
+  font-variant-numeric:tabular-nums;
+}
+.field textarea{font-family:var(--f-ui);min-height:74px;resize:vertical}
+.field-money{position:relative}
+.field-money input{padding-left:30px}
+.field-money::before{
+  content:"$";position:absolute;left:13px;top:38px;
+  font-family:var(--f-num);color:var(--muted);font-size:16px;z-index:1;
+}
+
+.seg{display:flex;gap:6px}
+.seg button{
+  flex:1;border:1px solid var(--line);background:var(--surface);
+  padding:12px 8px;border-radius:var(--radius-sm);cursor:pointer;
+  font-size:14px;font-weight:600;color:var(--ink-2);min-height:48px;
+}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+
+/* ---------- owner ---------- */
+.tabs{display:flex;gap:2px;overflow-x:auto;border-bottom:1px solid var(--line);background:var(--surface);position:sticky;top:53px;z-index:20}
+.tabs-in{display:flex;gap:2px;max-width:980px;margin:0 auto;padding:0 12px;width:100%}
+.tabs button{
+  border:0;background:transparent;cursor:pointer;white-space:nowrap;
+  padding:12px 12px;font-size:13px;font-weight:600;color:var(--muted);
+  border-bottom:2px solid transparent;margin-bottom:-1px;
+}
+.tabs button[aria-pressed="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+
+.grid{display:grid;gap:12px;grid-template-columns:1fr}
+@media(min-width:720px){.grid-2{grid-template-columns:1fr 1fr}}
+
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:720px){.tiles{grid-template-columns:repeat(4,1fr)}}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:13px 14px;box-shadow:var(--shadow)}
+.tile .mid{margin-top:6px}
+.tile-sub{font-family:var(--f-num);font-size:11px;color:var(--muted);margin-top:5px}
+
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:520px}
+th{
+  text-align:left;font-family:var(--f-num);font-size:10px;font-weight:500;
+  letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;
+}
+td{padding:11px 12px;border-bottom:1px solid var(--line-2);vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td.n{font-family:var(--f-num);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+th.n{text-align:right}
+.who{font-weight:600;letter-spacing:-.01em}
+.sub{font-size:11px;color:var(--muted);font-family:var(--f-num)}
+
+.delta{font-family:var(--f-num);font-weight:600;font-size:12px}
+.up{color:var(--good)}
+.down{color:var(--bad)}
+
+.insight{
+  background:var(--accent-soft);border:1px solid transparent;border-radius:var(--radius);
+  padding:13px 15px;display:flex;gap:11px;align-items:flex-start;
+}
+.insight-mark{
+  font-family:var(--f-num);font-size:10px;font-weight:600;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--accent);flex:none;padding-top:2px;
+}
+.insight p{margin:0;font-size:13px;line-height:1.5;color:var(--ink)}
+.insight b{font-weight:700}
+
+.empty{padding:34px 20px;text-align:center;color:var(--muted);font-size:13px}
+
+.toast{
+  position:fixed;left:50%;bottom:96px;transform:translateX(-50%);
+  background:var(--ink);color:var(--ground);
+  padding:11px 18px;border-radius:999px;font-size:13px;font-weight:600;
+  z-index:60;box-shadow:var(--shadow);pointer-events:none;
+  opacity:0;transition:opacity .18s;white-space:nowrap;max-width:90vw;
+}
+.toast.on{opacity:1}
+
+.bar{height:5px;background:var(--line-2);border-radius:999px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:999px}
+
+.hint{
+  font-size:12px;color:var(--muted);line-height:1.5;
+  background:var(--surface-2);border:1px solid var(--line-2);
+  border-radius:var(--radius-sm);padding:10px 12px;
+}
+.hint b{color:var(--ink-2);font-weight:600}
+
+.flash{animation:flashring 1.4s ease-out 1}
+@keyframes flashring{
+  0%,22%{box-shadow:0 0 0 3px var(--accent); border-color:var(--accent)}
+  100%{box-shadow:0 0 0 3px transparent}
+}
+.needed{
+  font-family:var(--f-num);font-size:10px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--warn);
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-in">
+    <div class="brand"><b>PackOut</b><span id="brandsub">Seller</span></div>
+    <div class="modesw" role="group" aria-label="View">
+      <button id="m-seller" aria-pressed="true">Seller</button>
+      <button id="m-owner" aria-pressed="false">Owner</button>
+    </div>
+  </div>
+</div>
+<div id="tabsHost"></div>
+<div id="app" class="shell"></div>
+<div id="footHost"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* =========================================================
+   Seed data \u2014 realistic Bay Area operation
+   ========================================================= */
+
+const PRODUCTS = [
+  { id:"verde", name:"Pork Chile Verde", short:"Verde", price:13, caseSize:12 },
+  { id:"mole",  name:"Chicken Mole",     short:"Mole",  price:13, caseSize:12 },
+  { id:"rajas", name:"Rajas con Queso",  short:"Rajas", price:12, caseSize:12 }
+];
+const P_IDS = PRODUCTS.map(p=>p.id);
+const prod = id => PRODUCTS.find(p=>p.id===id);
+
+const COMMISSION = 0.15;      // 15% of sales
+const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
+const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
+
+/* One van, two markets. The person going furthest drives and drops the other
+   off on the way, so the shop pays that gas once and it gets split between them.
+   The $20 driver pay is NOT charged to a market - it is payroll the shop owes
+   the driver, same as commission or paying someone back for ice. */
+const VAN_RUNS = [ { driver:"marin", riders:["ferry"] } ];
+function gasFor(min){ return Math.round(min * 2 * 0.35); }
+function vanRunFor(mid){ return VAN_RUNS.find(r => r.driver===mid || r.riders.indexOf(mid)>=0); }
+function vanCostFor(mid){
+  const run = vanRunFor(mid);
+  if(!run) return { ride:0, gas:gasFor(mkt(mid).driveMin), shareNames:[], rider:false };
+  const stops = 1 + run.riders.length;
+  const gas = Math.round(gasFor(mkt(run.driver).driveMin) / stops);
+  const rider = run.riders.indexOf(mid) >= 0;
+  const others = (run.driver===mid ? run.riders : [run.driver].concat(run.riders.filter(r=>r!==mid)));
+  return { ride: rider ? DRIVER_LEG_PAY*2 : 0, gas, shareNames: others.map(r=>mkt(r).name), rider };
+}
+
+const MARKETS = [
+  { id:"grand",  name:"Grand Lake",        city:"Oakland",     hours:"9:00 \u2013 2:00", sellHrs:5, fee:85,  driveMin:20, size:1.35,
+    stall:"B-14", loadIn:"7:15am", manager:"Dana Whitfield", phone:"(510) 555-0142", ride:false },
+  { id:"ferry",  name:"Ferry Building",    city:"San Francisco",hours:"8:00 \u2013 2:00", sellHrs:6, fee:145, driveMin:40, size:1.50,
+    stall:"North Arcade 7", loadIn:"6:30am", manager:"Priya Raman", phone:"(415) 555-0188", ride:true },
+  { id:"temes",  name:"Temescal",          city:"Oakland",     hours:"9:00 \u2013 1:00", sellHrs:4, fee:65,  driveMin:25, size:1.00,
+    stall:"A-3", loadIn:"7:45am", manager:"Marcus Ellery", phone:"(510) 555-0119", ride:false },
+  { id:"sanmat", name:"San Mateo",         city:"San Mateo",   hours:"9:00 \u2013 1:00", sellHrs:4, fee:70,  driveMin:45, size:0.85,
+    stall:"C-22", loadIn:"7:30am", manager:"Joyce Tran", phone:"(650) 555-0164", ride:true },
+  { id:"marin",  name:"Marin Civic Center",city:"San Rafael",  hours:"8:00 \u2013 1:00", sellHrs:5, fee:95,  driveMin:55, size:1.20,
+    stall:"D-9", loadIn:"6:45am", manager:"Hal Brenner", phone:"(415) 555-0173", ride:true }
+];
+const mkt = id => MARKETS.find(m=>m.id===id);
+
+const SELLERS = [
+  { id:"maria", name:"Maria Reyes", phone:"(510) 555-0121",  base:1.16, urban:0.16,  cashSlip:0.02 },
+  { id:"jose",  name:"Jos\u00E9 Luna", phone:"(510) 555-0148",    base:1.04, urban:-0.18, cashSlip:0.03 },
+  { id:"carla", name:"Carla Mendez", phone:"(510) 555-0176", base:0.96, urban:0.02,  cashSlip:0.02 },
+  { id:"danny", name:"Danny Ortiz", phone:"(510) 555-0193",  base:1.01, urban:0.0,   cashSlip:0.14 }
+];
+const slr = id => SELLERS.find(s=>s.id===id);
+
+// Product mix differs by market \u2014 the app should find this
+const MIX = {
+  grand:  { verde:0.34, mole:0.44, rajas:0.22 },
+  ferry:  { verde:0.29, mole:0.50, rajas:0.21 },
+  temes:  { verde:0.38, mole:0.36, rajas:0.26 },
+  sanmat: { verde:0.47, mole:0.28, rajas:0.25 },
+  marin:  { verde:0.31, mole:0.41, rajas:0.28 }
+};
+// Urban-leaning markets, for seller affinity
+const URBAN = { ferry:1, grand:1, temes:0.4, sanmat:0, marin:0.15 };
+
+/* How much a given kind of day moves sales. Used two ways: to stop a rained-out
+   Saturday from dragging down a market's average, and to size the send list to
+   the forecast. In the prototype these are seeded - live weather needs a server. */
+const WX_MULT = { "Clear":1.0, "Overcast":0.94, "Fog":0.90, "Rain":0.58, "Windy":0.88 };
+const wxMult = t => WX_MULT[t] || 1;
+
+const TODAY_WX = { t:"Clear", temp:74 };
+const FORECAST = {
+  grand:  { t:"Clear",    temp:76 },
+  ferry:  { t:"Fog",      temp:58 },
+  temes:  { t:"Clear",    temp:74 },
+  sanmat: { t:"Rain",     temp:55 },
+  marin:  { t:"Overcast", temp:63 }
+};
+
+const WEATHER = [
+  { t:"Clear", temp:72, mult:1.0 }, { t:"Clear", temp:78, mult:1.02 },
+  { t:"Overcast", temp:61, mult:0.94 }, { t:"Fog", temp:57, mult:0.9 },
+  { t:"Clear", temp:69, mult:1.0 }, { t:"Rain", temp:54, mult:0.58 },
+  { t:"Windy", temp:63, mult:0.88 }, { t:"Clear", temp:75, mult:1.03 }
+];
+
+/* ---- deterministic RNG so numbers never jump around ---- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const rnd = mulberry32(20260828);
+
+/* ---- dates ---- */
+const TODAY = new Date(); TODAY.setHours(0,0,0,0);
+const dISO = d => d.toISOString().slice(0,10);
+const daysAgo = n => { const d=new Date(TODAY); d.setDate(d.getDate()-n); return d; };
+const fmtDate = d => d.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"});
+const fmtShort = d => d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
+
+/* =========================================================
+   Generate 8 weeks of history
+   ========================================================= */
+
+const ROTA = [ // who worked where, week by week (index = weeks ago - 1)
+  { grand:"maria", ferry:"jose",  temes:"carla", sanmat:"danny", marin:"maria" },
+  { grand:"carla", ferry:"maria", temes:"danny", sanmat:"jose",  marin:"carla" },
+  { grand:"maria", ferry:"jose",  temes:"carla", sanmat:"danny", marin:"jose"  },
+  { grand:"danny", ferry:"maria", temes:"jose",  sanmat:"carla", marin:"maria" },
+  { grand:"maria", ferry:"jose",  temes:"danny", sanmat:"carla", marin:"carla" },
+  { grand:"carla", ferry:"maria", temes:"maria", sanmat:"jose",  marin:"danny" },
+  { grand:"jose",  ferry:"carla", temes:"danny", sanmat:"maria", marin:"maria" },
+  { grand:"maria", ferry:"jose",  temes:"carla", sanmat:"danny", marin:"jose"  }
+];
+
+function sellerMult(sid, mid){
+  const s = slr(sid);
+  return s.base + s.urban * (URBAN[mid] ?? 0.5);
+}
+
+const HISTORY = [];
+for(let w=8; w>=1; w--){
+  const date = daysAgo(w*7);
+  const wx = WEATHER[(w*3+1) % WEATHER.length];
+  MARKETS.forEach(m => {
+    const sid = ROTA[w-1][m.id];
+    // baseline packs sold at this market
+    const baseline = 100 * m.size;
+    const seasonal = 1 + (8-w)*0.012;           // slow growth over the season
+    const noise = 0.9 + rnd()*0.2;
+    let total = Math.round(baseline * sellerMult(sid,m.id) * wx.mult * seasonal * noise);
+
+    // opening was decided by gut \u2014 sometimes too little
+    const gut = Math.round(baseline * 1.18 * seasonal / 12) * 12;
+    const soldOut = total >= gut;
+    const sold = soldOut ? gut : total;
+
+    const opening={}, closing={}, samples={}, damaged={};
+    let s_left = sold;
+    P_IDS.forEach((pid,i)=>{
+      const share = MIX[m.id][pid];
+      const op = Math.round(gut*share/6)*6;
+      opening[pid]=op;
+      const sl = i===P_IDS.length-1 ? Math.min(s_left,op) : Math.min(Math.round(sold*share), op);
+      closing[pid] = Math.max(0, op - sl);
+      s_left -= sl;
+      samples[pid] = Math.round(rnd()*4)+2;
+      damaged[pid] = rnd()<0.12 ? 1 : 0;
+      closing[pid] = Math.max(0, closing[pid] - samples[pid] - damaged[pid]);
+    });
+
+    const soldReal = P_IDS.reduce((a,pid)=>a+(opening[pid]-closing[pid]-samples[pid]-damaged[pid]),0);
+    const revenue = P_IDS.reduce((a,pid)=>a+(opening[pid]-closing[pid]-samples[pid]-damaged[pid])*prod(pid).price,0);
+    const cardShare = 0.62 + rnd()*0.14;
+    const cardTotal = Math.round(revenue*cardShare);
+    const expectedCash = revenue - cardTotal;
+    const slip = slr(sid).cashSlip;
+    const off = rnd() < slip ? -(Math.round(rnd()*5)+2)*prod("verde").price/13*8 : 0;
+    const cashCounted = Math.max(0, Math.round(expectedCash + off));
+
+    HISTORY.push({
+      id:`${m.id}-${dISO(date)}`, date:dISO(date), dateObj:date,
+      marketId:m.id, sellerId:sid, status:"done",
+      opening, closing, samples, damaged,
+      cardTotal, cashCounted, float:150,
+      soldOut, soldOutAt: soldOut ? "1:10pm" : null,
+      weather:{ t:wx.t, temp:wx.temp },
+      arrived: rnd()<0.15 ? "late" : "ontime"
+    });
+  });
+}
+
+/* =========================================================
+   Today
+   ========================================================= */
+
+const TODAY_PLAN = [
+  { marketId:"grand",  sellerId:"carla", status:"done"    },
+  { marketId:"ferry",  sellerId:"jose",  status:"selling" },
+  { marketId:"marin",  sellerId:"danny", status:"selling" },
+  { marketId:"sanmat", sellerId:"maria", status:"selling" },
+  { marketId:"temes",  sellerId:"you",   status:"assigned"} // <- the phone user
+];
+
+/* ---- how much to send: the flagship calculation ---- */
+function recommend(marketId, productId){
+  const past = HISTORY.filter(d=>d.marketId===marketId).slice(-4);
+  const sold = past.map(d => d.opening[productId]-d.closing[productId]-d.samples[productId]-d.damaged[productId]);
+  const anySoldOut = past.some(d=>d.soldOut);
+
+  // A rained-out day is not a weak market. Lift each past day back to what it
+  // would have done in normal weather before averaging.
+  const normalised = past.map((d,i) => sold[i] / wxMult(d.weather.t));
+  const avg = normalised.reduce((a,b)=>a+b,0)/(normalised.length||1);
+
+  const buffer = anySoldOut ? 1.30 : 1.15;
+  const fc = FORECAST[marketId] || null;
+  const wx = fc ? wxMult(fc.t) : 1;
+
+  const cs = prod(productId).caseSize;
+  const qty = Math.max(cs, Math.ceil(avg*buffer*wx/cs)*cs);
+  const plain = Math.max(cs, Math.ceil(avg*buffer/cs)*cs);
+  return { qty, sold, avg, anySoldOut, buffer, fc, wx, plain };
+}
+function recommendMarket(marketId){
+  const out = {}; let total = 0, plain = 0;
+  P_IDS.forEach(pid => { const r = recommend(marketId,pid); out[pid]=r; total += r.qty; plain += r.plain; });
+  const fc = FORECAST[marketId] || null;
+  return { byProduct: out, total, plain, fc, wx: fc ? wxMult(fc.t) : 1 };
+}
+
+/* ---- freezer stock ---- */
+const FREEZER = { verde:148, mole:96, rajas:132 };
+const BATCH_AGE = { verde:{made:"Aug 19", trips:2}, mole:{made:"Aug 22", trips:1}, rajas:{made:"Aug 8", trips:5} };
+
+/* =========================================================
+   Live state (the seller's own day) \u2014 persisted
+   ========================================================= */
+
+const STORE_KEY = "packout.v2";
+const NOTE_KEY  = "packout.note.v1";
+const DEFAULT_NOTE = "Rajas from the Aug 8 batch has to move today \u2014 run it 3 for $33 and lead with it when people walk up. Everything else stays full price.";
+let NOTE = DEFAULT_NOTE, NOTE_AT = "6:40am";
+function loadNote(){
+  try{ const r = localStorage.getItem(NOTE_KEY); if(r!==null) NOTE = r; }catch(e){}
+}
+function saveNote(){ try{ localStorage.setItem(NOTE_KEY, NOTE); }catch(e){} }
+const SELLER_SCREEN_NAMES = ["today","loadout","market","closeout","result"];
+
+/* The phone is used before the market and after it. Never during. */
+const BLANK = {
+  screen:"today", mode:"seller", tab:"today",
+  status:"assigned",             // assigned -> loaded -> setup -> closed
+  arrivedAt:null, photo:null,
+  opening:{}, closing:{}, samples:{verde:0,mole:0,rajas:0}, damaged:{verde:0,mole:0,rajas:0},
+  endedAt:null,
+  cashCounted:"", cardTotal:"", float:150,
+  soldOut:null, soldOutAt:"", note:"", lead:"",
+  showDamaged:false, showLead:false,
+  submittedAt:null, showFix:false, corrections:[], marketOpen:null,
+  packedAt:null, discounts:"", paidOut:"",
+  expenses:[],
+  travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
+  packedBy:"you", showPacker:false
+};
+let S = load() || JSON.parse(JSON.stringify(BLANK));
+loadNote();
+
+function save(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
+  catch(e){
+    // Almost always the photo pushing past the storage limit.
+    // The counts are the paycheck; the photo is not. Drop it and keep the numbers.
+    const hasReceipt = (S.expenses||[]).some(x=>x.photo);
+    if(S.photo || hasReceipt){
+      const keep = S.photo, keptReceipts = (S.expenses||[]).map(x=>x.photo);
+      S.photo = null;
+      (S.expenses||[]).forEach(x=>{ x.photo = null; });
+      try{
+        localStorage.setItem(STORE_KEY, JSON.stringify(S));
+        toast("Photos were too big to keep \u2014 your counts and amounts are saved");
+        return true;
+      }catch(e2){
+        S.photo = keep;
+        (S.expenses||[]).forEach((x,i)=>{ x.photo = keptReceipts[i]; });
+      }
+    }
+    toast("Couldn't save on this phone \u2014 write your counts down");
+    return false;
+  }
+}
+function load(){
+  try{
+    const r = localStorage.getItem(STORE_KEY);
+    if(!r) return null;
+    const saved = JSON.parse(r);
+    if(!saved || typeof saved !== "object") return null;
+    // A day saved by an older version is missing fields this one expects.
+    // Start from a blank day and lay the saved values on top, so an update
+    // can never leave someone staring at an empty screen mid-market.
+    const fresh = JSON.parse(JSON.stringify(BLANK));
+    const merged = Object.assign(fresh, saved);
+    merged.opening  = Object.assign({}, fresh.opening,  saved.opening  || {});
+    merged.closing  = Object.assign({}, fresh.closing,  saved.closing  || {});
+    merged.samples  = Object.assign({}, fresh.samples,  saved.samples  || {});
+    merged.damaged  = Object.assign({}, fresh.damaged,  saved.damaged  || {});
+    if(!Array.isArray(merged.corrections)) merged.corrections = [];
+    if(!Array.isArray(merged.expenses)) merged.expenses = [];
+    merged.travel = Object.assign({mode:"van",legs:0,passenger:"",marketId:"",gasMode:"claim",gasAmount:""}, merged.travel || {});
+    delete merged.drive;
+    if(!SELLER_SCREEN_NAMES.includes(merged.screen)) merged.screen = "today";
+    return merged;
+  }catch(e){ return null; }
+}
+function reset(){ S = JSON.parse(JSON.stringify(BLANK)); save(); render(); }
+
+const MY_MARKET = mkt("temes");
+const MY_REC = recommendMarket("temes");
+
+/* =========================================================
+   Helpers
+   ========================================================= */
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money = n => "$" + Math.round(n).toLocaleString();
+const money2 = n => "$" + n.toFixed(2);
+
+function soldByCount(pid){
+  const op = S.opening[pid] ?? 0, cl = S.closing[pid] ?? 0;
+  return Math.max(0, op - cl - (S.samples[pid]||0) - (S.damaged[pid]||0));
+}
+function openedTotal(){ return P_IDS.reduce((a,p)=>a+(S.opening[p]||0),0); }
+function soldTotal(){ return P_IDS.reduce((a,p)=>a+soldByCount(p),0); }
+function revenueTotal(){ return P_IDS.reduce((a,p)=>a+soldByCount(p)*prod(p).price,0); }
+function expTotal(source){
+  return (S.expenses||[]).reduce((a,e)=> a + ((!source || e.source===source) ? (Number(e.amount)||0) : 0), 0);
+}
+function packedByName(){
+  if(!S.packedBy || S.packedBy==="you") return "You";
+  const x = slr(S.packedBy);
+  return x ? x.name : "You";
+}
+function packedBySomeoneElse(){ return !!S.packedBy && S.packedBy!=="you"; }
+function driverPay(){
+  const t = S.travel || {};
+  return t.mode==="van" ? (t.legs||0) * DRIVER_LEG_PAY : 0;
+}
+// A flat gas allowance for taking your own car. If instead they filled the tank
+// themselves, that is a receipt line under "money you spent" - never both, or
+// the same gas gets paid twice.
+function carAllowance(){
+  const t = S.travel || {};
+  return (t.mode==="own" && t.gasMode==="flat") ? (Number(t.gasAmount)||0) : 0;
+}
+function countedAll(){ return P_IDS.every(p => S.closing[p] !== undefined && S.closing[p] !== null); }
+
+function hoursWorked(m){ return m.sellHrs + 1 + 0.75 + 0.75 + (m.driveMin*2)/60; }
+
+/* How a seller performs at a market, against that market's own average.
+   Everything the People tab claims is derived from these. */
+/* Prefer what actually got logged at that market. Fall back to the
+   model only when this person hasn't worked it enough times yet. */
+function observedAtMarket(sid, mid){
+  const at = HISTORY.filter(d=>d.marketId===mid);
+  const mine = at.filter(d=>d.sellerId===sid);
+  if(at.length < 2 || mine.length < 2) return null;
+  const avgAll  = at.reduce((a,d)=>a+dayStats(d).sold,0)/at.length;
+  const avgMine = mine.reduce((a,d)=>a+dayStats(d).sold,0)/mine.length;
+  const revMine = mine.reduce((a,d)=>a+dayStats(d).revenue,0)/mine.length;
+  return { pct: avgMine/avgAll - 1, revenue: revMine, n: mine.length };
+}
+function perfPct(sid, mid){
+  const o = observedAtMarket(sid, mid);
+  if(o) return o.pct;
+  const avg = SELLERS.reduce((a,s)=>a+sellerMult(s.id,mid),0)/SELLERS.length;
+  return sellerMult(sid,mid)/avg - 1;
+}
+function estRevenue(sid, mid){
+  const o = observedAtMarket(sid, mid);
+  if(o) return o.revenue;
+  return 100 * mkt(mid).size * sellerMult(sid,mid) * 12.7;
+}
+function bestSwap(){
+  const plans = TODAY_PLAN.filter(p=>p.sellerId!=="you");
+  let best = null;
+  for(let i=0;i<plans.length;i++){
+    for(let j=i+1;j<plans.length;j++){
+      const a=plans[i], b=plans[j];
+      const now = estRevenue(a.sellerId,a.marketId) + estRevenue(b.sellerId,b.marketId);
+      const sw  = estRevenue(a.sellerId,b.marketId) + estRevenue(b.sellerId,a.marketId);
+      if(!best || sw-now > best.gain) best = { a, b, gain: sw-now };
+    }
+  }
+  return best;
+}
+function cashRecord(sid){
+  const days = HISTORY.filter(d=>d.sellerId===sid).map(dayStats);
+  const bad = days.filter(d=>d.variance < -15);
+  const avgShort = bad.length ? bad.reduce((a,d)=>a+d.variance,0)/bad.length : 0;
+  return { bad:bad.length, total:days.length, avgShort };
+}
+
+function dayStats(d){
+  const sold = P_IDS.reduce((a,p)=>a+(d.opening[p]-d.closing[p]-d.samples[p]-d.damaged[p]),0);
+  const revenue = P_IDS.reduce((a,p)=>a+(d.opening[p]-d.closing[p]-d.samples[p]-d.damaged[p])*prod(p).price,0);
+  const money_in = d.cashCounted + d.cardTotal;
+  const variance = money_in - revenue;
+  const m = mkt(d.marketId);
+  const hrs = hoursWorked(m);
+  return { sold, revenue, money_in, variance, hrs, perHr:(revenue-m.fee)/hrs, commission:revenue*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
+}
+
+function toast(msg){
+  const t=$("toast"); t.textContent=msg; t.classList.add("on");
+  clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove("on"),1900);
+}
+function readImage(file, maxPx, quality, cb){
+  const img = new Image();
+  img.onload = () => {
+    const sc = Math.min(1, maxPx/Math.max(img.width, img.height));
+    const c = document.createElement("canvas");
+    c.width = Math.round(img.width*sc); c.height = Math.round(img.height*sc);
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    let data = null;
+    try{ data = c.toDataURL("image/jpeg", quality); }catch(err){}
+    URL.revokeObjectURL(img.src);
+    cb(data);
+  };
+  img.onerror = () => { toast("Couldn't read that photo"); cb(null); };
+  img.src = URL.createObjectURL(file);
+}
+function buzz(ms){ try{ navigator.vibrate && navigator.vibrate(ms); }catch(e){} }
+
+let wakeLock=null;
+async function keepAwake(on){
+  try{
+    if(on && "wakeLock" in navigator && !wakeLock){ wakeLock = await navigator.wakeLock.request("screen"); }
+    else if(!on && wakeLock){ wakeLock.release(); wakeLock=null; }
+  }catch(e){}
+}
+
+/* =========================================================
+   SELLER SCREENS
+   ========================================================= */
+
+function scr_today(){
+  const r = MY_REC;
+  const rows = PRODUCTS.map(p=>{
+    const rec = r.byProduct[p.id];
+    return `<div class="step-row">
+      <div class="grow">
+        <div class="step-name">${esc(p.name)}</div>
+      </div>
+      <div class="mid">${rec.qty}</div>
+    </div>`;
+  }).join("");
+
+  return `
+  <div class="pad stack">
+    <div>
+      <div class="lbl">${esc(fmtDate(TODAY))}</div>
+      <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
+      <p class="note" style="margin-top:5px">${esc(MY_MARKET.city)} \u00B7 ${esc(MY_MARKET.hours)} \u00B7 Stall ${esc(MY_MARKET.stall)}</p>
+      <p class="note" style="margin-top:3px">${esc(TODAY_WX.t)}, ${TODAY_WX.temp}&deg; today</p>
+    </div>
+
+    <div class="card stripe stripe-live">
+      <div class="card-hd"><h3>Take ${r.total} packs</h3><span class="pill pill-live"><span class="dot"></span>Ready</span></div>
+      ${rows}
+    </div>
+
+    ${MY_REC.wx < 0.97 ? `<div class="card card-pad stripe stripe-warn">
+      <div class="spread"><div class="lbl">${esc(MY_REC.fc.t)} expected</div>
+        <span class="pill pill-warn">${MY_REC.total - MY_REC.plain} packs</span></div>
+      <p class="note" style="margin-top:7px">${esc(MY_REC.fc.t)} and ${MY_REC.fc.temp}&deg; at this market today, so you're taking
+        ${MY_REC.plain - MY_REC.total} fewer than a normal day. Better than hauling them back cold.</p>
+    </div>` : ""}
+
+    <div class="hint">
+      Built from your last 4 weeks here, plus a <b>15% cushion</b>, rounded up to full cases of 12.
+      Rajas is the oldest batch \u2014 <b>made ${esc(BATCH_AGE.rajas.made)}, out ${BATCH_AGE.rajas.trips} times</b>. Push it first.
+    </div>
+
+    <div class="card card-pad stack-sm">
+      <div class="lbl">Before you leave</div>
+      ${["Canopy + 4 weights","Tablecloth &amp; price sign","Square reader charged","$150 change in the till","Ice packs / dry ice","Gloves, sanitizer, trash bag","Sample tray + toothpicks"]
+        .map(x=>`<div class="row" style="font-size:13px"><span style="color:var(--accent);font-weight:700">\u2713</span><span>${x}</span></div>`).join("")}
+    </div>
+
+    <div class="card card-pad">
+      <div class="spread">
+        <div>
+          <div class="lbl">Load-in</div>
+          <div class="mid" style="margin-top:5px">${esc(MY_MARKET.loadIn)}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="lbl">Market contact</div>
+          <div style="font-size:13px;font-weight:600;margin-top:5px">${esc(MY_MARKET.manager)}</div>
+          <div class="sub">${esc(MY_MARKET.phone)}</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function foot_today(){
+  return `<button class="btn" data-go="loadout">Pack the cooler</button>`;
+}
+
+function scr_loadout(){
+  const rows = PRODUCTS.map(p=>{
+    const v = S.opening[p.id] ?? MY_REC.byProduct[p.id].qty;
+    return `<div class="step-row">
+      <div class="grow">
+        <div class="step-name">${esc(p.short)}</div>
+        <div class="step-sub">suggested ${MY_REC.byProduct[p.id].qty}</div>
+      </div>
+      <div class="stepper">
+        <button data-adj="opening" data-p="${p.id}" data-d="-6" aria-label="Less ${esc(p.short)}">\u2013</button>
+        <input class="num" type="number" inputmode="numeric" data-set="opening" data-p="${p.id}" value="${v}">
+        <button data-adj="opening" data-p="${p.id}" data-d="6" aria-label="More ${esc(p.short)}">+</button>
+      </div>
+    </div>`;
+  }).join("");
+  const total = P_IDS.reduce((a,p)=>a+(S.opening[p] ?? MY_REC.byProduct[p].qty),0);
+
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">Step 1 of 3</div>
+      <h1 class="page" style="margin-top:6px">Count into the cooler</h1>
+      <p class="note" style="margin-top:5px">Change anything that doesn't match what you actually loaded.</p>
+    </div>
+    <div class="card">${rows}</div>
+    <div class="card card-pad spread">
+      <div class="lbl">Going out</div>
+      <div class="mid">${total} packs</div>
+    </div>
+    ${total !== MY_REC.total
+      ? `<div class="card card-pad stripe stripe-warn stack-sm">
+           <div class="spread"><div class="lbl">Different from the send list</div>
+             <span class="pill pill-warn">${total>MY_REC.total?"+":"\u2212"}${Math.abs(total-MY_REC.total)}</span></div>
+           <p class="note">Send list said ${MY_REC.total}, you're taking ${total}. That's fine &mdash; the cooler is the truth. The shop just gets told, so the count still adds up at the end.</p>
+         </div>`
+      : ""}
+    <div class="card card-pad">
+      <div class="spread">
+        <div><div class="lbl">Packed by</div>
+          <div style="font-size:15px;font-weight:600;margin-top:5px">${esc(packedByName())}</div></div>
+        <button class="btn btn-quiet btn-sm" data-act="toggle" data-flag="showPacker">${S.showPacker?"Done":"Change"}</button>
+      </div>
+      ${S.showPacker ? `<div class="stack-sm" style="margin-top:12px">
+        <div class="seg" style="flex-wrap:wrap">
+          <button data-packer="you" aria-pressed="${!packedBySomeoneElse()}" style="flex:1 0 30%">You</button>
+          ${SELLERS.map(x=>`<button data-packer="${x.id}" aria-pressed="${S.packedBy===x.id}" style="flex:1 0 30%">${esc(x.name.split(" ")[0])}</button>`).join("")}
+        </div>
+        <div class="hint">Only change this if someone else counted the cooler. If the count turns out wrong, the shop needs to know whose count it was.</div>
+      </div>` : ""}
+    </div>
+
+    <div class="hint">This count is what everything else is measured against. Put in what's <b>actually</b> in the cooler, even if it isn't the suggested number.</div>
+  </div>`;
+}
+function foot_loadout(){
+  return `<button class="btn" data-go="market">Cooler is packed</button>
+          <button class="btn btn-quiet" data-go="today">Back</button>`;
+}
+
+function scr_market(){
+  const total = openedTotal();
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">Step 2 of 3</div>
+      <h1 class="page" style="margin-top:6px">At the market</h1>
+      <p class="note" style="margin-top:5px">One photo of your setup, then put the phone away until close.</p>
+    </div>
+
+    <div class="card card-pad stack-sm">
+      <div class="spread"><div class="lbl">In the cooler</div><div class="mid">${total}</div></div>
+      <div class="bar"><i style="width:100%"></i></div>
+      <div class="chips">${PRODUCTS.map(p=>`<span class="chip">${esc(p.short)} ${S.opening[p.id]||0}</span>`).join("")}</div>
+    </div>
+
+    ${S.photo
+      ? `<div class="card stripe stripe-good">
+           <div class="card-hd">
+             <div><h3>Setup logged</h3><div class="sub" style="margin-top:3px">${esc(S.arrivedAt)}</div></div>
+             <span class="pill pill-good">Time stamped</span>
+           </div>
+           <img src="${S.photo}" alt="Your booth setup" style="display:block;width:100%;height:auto">
+           <div class="card-pad"><button class="btn btn-quiet" data-act="retake">Take it again</button></div>
+         </div>`
+      : `<label class="btn btn-ghost" style="min-height:96px;flex-direction:column;gap:5px;cursor:pointer">
+           <span>Photo of your setup</span>
+           <span class="sub" style="font-weight:500">Stamps the time automatically</span>
+           <input id="photoIn" type="file" accept="image/*" capture="environment" style="position:absolute;width:1px;height:1px;opacity:0">
+         </label>`}
+
+    <div class="hint">
+      Load-in is <b>${esc(MY_MARKET.loadIn)}</b> at stall <b>${esc(MY_MARKET.stall)}</b>.
+      The photo shows the shop the booth was actually up and ready, not just that you got there.
+    </div>
+
+    ${S.packedAt ? `<div class="card card-pad spread">
+      <div><div class="lbl">Packed by</div><div style="font-size:14px;font-weight:600;margin-top:5px">${esc(packedByName())}</div></div>
+      <div style="text-align:right"><div class="lbl">Left the shop</div><div class="mid" style="margin-top:5px">${esc(S.packedAt)}</div></div>
+    </div>` : ""}
+
+    ${NOTE.trim() ? `<div class="card stripe stripe-live">
+      <div class="card-hd"><h3>From the shop</h3><span class="pill pill-live">${esc(NOTE_AT)}</span></div>
+      <div class="card-pad"><p style="margin:0;font-size:15px;line-height:1.5">${esc(NOTE)}</p></div>
+    </div>` : ""}
+
+    <div class="card card-pad stack-sm">
+      <div class="lbl">Rest of the day</div>
+      <p class="note">Nothing else to do in here while you sell. Come back when the market is over and count what's left.</p>
+    </div>
+  </div>`;
+}
+function foot_market(){
+  return `<button class="btn" data-go="closeout" ${S.photo?"":"disabled"}>Market's over &mdash; count up</button>
+          <button class="btn btn-quiet" data-go="loadout">Back</button>`;
+}
+
+
+function scr_closeout(){
+  const rows = PRODUCTS.map(p=>{
+    const v = S.closing[p.id];
+    const shown = (v===undefined || v===null) ? "" : v;
+    return `<div class="step-row">
+      <div class="grow">
+        <div class="step-name">${esc(p.short)}</div>
+        <div class="step-sub">took ${S.opening[p.id]||0} out${shown===""?` &middot; <span class="needed">not counted</span>`:""}</div>
+      </div>
+      <div class="stepper">
+        <button data-adj="closing" data-p="${p.id}" data-d="-1" aria-label="Less ${esc(p.short)}">&ndash;</button>
+        <input class="num" type="number" inputmode="numeric" placeholder="?" data-set="closing" data-p="${p.id}" value="${shown}">
+        <button data-adj="closing" data-p="${p.id}" data-d="1" aria-label="More ${esc(p.short)}">+</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  const sampleRows = PRODUCTS.map(p=>`<div class="step-row">
+      <div class="grow"><div class="step-name">${esc(p.short)}</div></div>
+      <div class="stepper">
+        <button data-adj="samples" data-p="${p.id}" data-d="-1" aria-label="Fewer ${esc(p.short)} samples">&ndash;</button>
+        <input class="num" type="number" inputmode="numeric" data-set="samples" data-p="${p.id}" value="${S.samples[p.id]||0}">
+        <button data-adj="samples" data-p="${p.id}" data-d="1" aria-label="More ${esc(p.short)} samples">+</button>
+      </div>
+    </div>`).join("");
+
+  const damagedRows = PRODUCTS.map(p=>`<div class="step-row">
+      <div class="grow"><div class="step-name">${esc(p.short)}</div></div>
+      <div class="stepper">
+        <button data-adj="damaged" data-p="${p.id}" data-d="-1" aria-label="Fewer ${esc(p.short)} damaged">&ndash;</button>
+        <input class="num" type="number" inputmode="numeric" data-set="damaged" data-p="${p.id}" value="${S.damaged[p.id]||0}">
+        <button data-adj="damaged" data-p="${p.id}" data-d="1" aria-label="More ${esc(p.short)} damaged">+</button>
+      </div>
+    </div>`).join("");
+
+  const dmgTotal = P_IDS.reduce((a,p)=>a+(S.damaged[p]||0),0);
+
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">Step 3 of 3</div>
+      <h1 class="page" style="margin-top:6px">Count what's left</h1>
+      <p class="note" style="margin-top:5px">Count the cooler before you drive off, not after.</p>
+    </div>
+    <div class="card">${rows}</div>
+
+    <div class="card">
+      <div class="card-hd"><h3>Samples given out</h3><span class="pill">comes out of the cooler</span></div>
+      ${sampleRows}
+    </div>
+    <div class="hint">Samples leave the cooler but bring in no money. Counting them here is what keeps you from looking short.</div>
+
+    <div class="card card-pad stack-sm">
+      <div class="spread"><div class="lbl">Did you sell out?</div>
+        ${S.soldOut===null?`<span class="needed">needed</span>`:""}</div>
+      <div class="seg">
+        <button data-sold="no"  aria-pressed="${S.soldOut===false}">No, had extra</button>
+        <button data-sold="yes" aria-pressed="${S.soldOut===true}">Yes, ran out</button>
+      </div>
+      ${S.soldOut===true ? `<div class="field" style="margin-top:8px">
+        <label class="lbl" for="soAt">About what time did you run out?</label>
+        <input id="soAt" type="text" inputmode="text" placeholder="1:15pm" value="${esc(S.soldOutAt)}" data-set="soldOutAt">
+      </div>
+      <div class="hint">Good to know &mdash; next week's send list goes up so you're not turning people away.</div>` : ""}
+    </div>
+
+    <div class="card card-pad stack">
+      <div class="field field-money">
+        <label class="lbl" for="cash">Cash counted (not counting your $150 float)${S.cashCounted===""?` &middot; <span class="needed">needed</span>`:""}</label>
+        <input id="cash" type="number" inputmode="decimal" placeholder="0" value="${esc(S.cashCounted)}" data-set="cashCounted">
+      </div>
+      <div class="field field-money">
+        <label class="lbl" for="card">Square total${S.cardTotal===""?` &middot; <span class="needed">needed</span>`:""}</label>
+        <input id="card" type="number" inputmode="decimal" placeholder="0" value="${esc(S.cardTotal)}" data-set="cardTotal">
+      </div>
+      <div class="field">
+        <label class="lbl" for="note">Anything worth knowing? (optional)</label>
+        <textarea id="note" placeholder="Slow until 11, street fair two blocks over&hellip;" data-set="note">${esc(S.note)}</textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>Anything that moved the money?</h3><span class="pill">leave blank if none</span></div>
+      <div class="card-pad stack">
+        <div class="field field-money">
+          <label class="lbl" for="disc">Deals &mdash; total knocked off today</label>
+          <input id="disc" type="number" inputmode="decimal" placeholder="0" value="${esc(S.discounts)}" data-set="discounts">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>Money you spent today</h3><span class="pill">gas, ice, stall fee</span></div>
+      ${(S.expenses||[]).length ? (S.expenses||[]).map((e,i)=>`
+        <div class="step-row" style="flex-wrap:wrap;gap:8px">
+          <select class="grow" data-exp="${i}" data-f="kind" style="padding:11px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:15px;min-width:110px">
+            ${EXPENSE_KINDS.map(k=>`<option ${e.kind===k?"selected":""}>${k}</option>`).join("")}
+          </select>
+          <div class="field-money" style="position:relative;width:112px">
+            <input type="number" inputmode="decimal" placeholder="0" value="${esc(e.amount)}" data-exp="${i}" data-f="amount"
+              style="width:100%;padding:11px 11px 11px 26px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-family:var(--f-num);font-size:15px">
+            <span style="position:absolute;left:10px;top:11px;color:var(--muted);font-family:var(--f-num);font-size:15px">$</span>
+          </div>
+          <div class="seg" style="flex-basis:100%">
+            <button data-expsrc="${i}" data-v="till" aria-pressed="${e.source==="till"}">Till cash</button>
+            <button data-expsrc="${i}" data-v="own"  aria-pressed="${e.source==="own"}">My own money</button>
+            <button class="btn-quiet" data-expdel="${i}" style="flex:0 0 46px;border-radius:6px" aria-label="Remove this line">&times;</button>
+          </div>
+          <div class="row" style="flex-basis:100%;gap:9px;align-items:center">
+            ${e.photo
+              ? `<img src="${e.photo}" alt="Receipt" style="width:46px;height:46px;object-fit:cover;border-radius:6px;border:1px solid var(--line)">
+                 <span class="sub">Receipt attached</span>
+                 <button class="btn btn-quiet btn-sm" data-exprm="${i}" style="margin-left:auto">Remove</button>`
+              : `<label class="btn btn-quiet btn-sm" style="width:auto;cursor:pointer;position:relative">
+                   Add receipt photo
+                   <input type="file" accept="image/*" capture="environment" data-photofor="${i}"
+                     style="position:absolute;width:1px;height:1px;opacity:0">
+                 </label>`}
+          </div>
+        </div>`).join("") : `<div class="empty">Nothing spent yet</div>`}
+      <div class="card-pad"><button class="btn btn-quiet" data-act="exp-add">Add something you paid for</button></div>
+    </div>
+    <div class="hint">
+      <b>Till cash</b> means you paid with money from the register &mdash; the till will be light by that much, and that's fine.
+      <b>My own money</b> means you fronted it, and the shop pays you back tonight.
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>Getting there</h3><span class="pill">${money(DRIVER_LEG_PAY)} a leg for driving</span></div>
+      <div class="card-pad stack-sm">
+        <div class="seg">
+          <button data-travel="van"  aria-pressed="${S.travel.mode==="van"}">Company van</button>
+          <button data-travel="own"  aria-pressed="${S.travel.mode==="own"}">My own car</button>
+          <button data-travel="ride" aria-pressed="${S.travel.mode==="ride"}">Rode along</button>
+        </div>
+
+        ${S.travel.mode==="van" ? `
+          <div class="lbl" style="margin-top:10px">Did you drop someone off?</div>
+          <div class="seg">
+            <button data-legs="0" aria-pressed="${S.travel.legs===0}">No</button>
+            <button data-legs="1" aria-pressed="${S.travel.legs===1}">Drop off</button>
+            <button data-legs="2" aria-pressed="${S.travel.legs===2}">Both ways</button>
+          </div>
+          ${S.travel.legs>0 ? `
+            <div class="field" style="margin-top:8px">
+              <label class="lbl" for="pass">Who did you drive?</label>
+              <select id="pass" data-set="passenger" style="padding:13px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:16px">
+                <option value="">Pick a person</option>
+                ${SELLERS.map(x=>`<option value="${x.id}" ${S.travel.passenger===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label class="lbl" for="passm">To which market?</label>
+              <select id="passm" data-set="passengerMarket" style="padding:13px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);font-size:16px">
+                <option value="">Pick a market</option>
+                ${MARKETS.map(x=>`<option value="${x.id}" ${S.travel.marketId===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
+              </select>
+            </div>
+            <div class="spread" style="margin-top:4px"><div class="lbl">Driving pay</div><div class="mid">${money(driverPay())}</div></div>` : ""}` : ""}
+
+        ${S.travel.mode==="own" ? `
+          <div class="lbl" style="margin-top:10px">How is the gas being covered?</div>
+          <div class="seg">
+            <button data-gasmode="claim" aria-pressed="${S.travel.gasMode==="claim"}">I paid, claiming it</button>
+            <button data-gasmode="flat"  aria-pressed="${S.travel.gasMode==="flat"}">Set amount</button>
+          </div>
+          ${S.travel.gasMode==="flat"
+            ? `<div class="field field-money" style="margin-top:8px">
+                 <label class="lbl" for="gasamt">Agreed amount for gas</label>
+                 <input id="gasamt" type="number" inputmode="decimal" placeholder="0" value="${esc(S.travel.gasAmount)}" data-set="gasAmount">
+               </div>
+               <div class="hint">Goes straight onto what the shop owes you. Don't also add it under money you spent, or it gets paid twice.</div>`
+            : `<div class="hint">Add what you paid under <b>money you spent</b> above &mdash; mark it <b>my own money</b> and snap the receipt. It comes back to you tonight.</div>`}` : ""}
+
+        ${S.travel.mode==="ride" ? `<div class="hint">Nothing to log. Whoever drove you claims the driving pay on their own closeout.</div>` : ""}
+      </div>
+    </div>
+
+    ${S.showLead
+      ? `<div class="card card-pad stack-sm">
+           <div class="spread"><div class="lbl">Big order</div>
+             <button class="btn btn-quiet btn-sm" data-act="toggle" data-flag="showLead">Cancel</button></div>
+           <div class="field">
+             <textarea id="leadBox" placeholder="Rosa &mdash; (510) 555-0134 &mdash; 200 packs for a graduation, Sept 20" data-set="lead">${esc(S.lead||"")}</textarea>
+           </div>
+           <div class="hint">One catering order can be worth more than the whole market day.</div>
+         </div>`
+      : `<button class="btn btn-quiet" data-act="toggle" data-flag="showLead">${S.lead ? "Big order saved &mdash; edit" : "Anyone ask about a big order?"}</button>`}
+
+    ${S.showDamaged
+      ? `<div class="card">
+           <div class="card-hd"><h3>Damaged or thawed</h3>
+             <button class="btn btn-quiet btn-sm" data-act="toggle" data-flag="showDamaged">Done</button></div>
+           ${damagedRows}
+         </div>`
+      : `<button class="btn btn-quiet" data-act="toggle" data-flag="showDamaged">${dmgTotal ? dmgTotal+" damaged &mdash; edit" : "Anything come back damaged?"}</button>`}
+  </div>`;
+}
+function closeoutMissing(){
+  const m = [];
+  P_IDS.forEach(p=>{
+    const v = S.closing[p];
+    if(v===undefined || v===null || v==="")
+      m.push({ label:prod(p).short+" count", sel:"[data-set='closing'][data-p='"+p+"']" });
+  });
+  if(S.soldOut===null) m.push({ label:"did you sell out", sel:"[data-sold='no']" });
+  if(S.cashCounted==="") m.push({ label:"cash counted", sel:"#cash" });
+  if(S.cardTotal==="")   m.push({ label:"Square total",  sel:"#card" });
+  return m;
+}
+function foot_closeout(){
+  const miss = closeoutMissing();
+  if(!miss.length){
+    return `<button class="btn" data-go="result">Send it in</button>
+            <button class="btn btn-quiet" data-go="market">Back</button>`;
+  }
+  const first = miss[0];
+  return `<button class="btn btn-ghost" data-act="jump" data-sel="${first.sel}">
+            <span>${miss.length} left &mdash; next: ${esc(first.label)}</span>
+          </button>
+          <button class="btn btn-quiet" data-go="market">Back</button>`;
+}
+
+function scr_result(){
+  const sold = soldTotal();
+  const rev = revenueTotal();
+  const cash = Number(S.cashCounted)||0, card = Number(S.cardTotal)||0;
+  const disc = Number(S.discounts)||0;
+  const fromTill = expTotal("till");   // spent out of the register: the till is legitimately light
+  const fromOwn  = expTotal("own");    // fronted by the seller: the shop owes it back
+  const drivePay = driverPay();
+  const inHand = cash + card;
+  const expected = rev - disc - fromTill;
+  const variance = inHand - expected;
+  const commission = rev * COMMISSION;
+  const carGas = carAllowance();
+  const owed = commission + drivePay + fromOwn + carGas;
+  const returning = P_IDS.reduce((a,p)=>a+(S.closing[p]||0),0);
+  const samples = P_IDS.reduce((a,p)=>a+(S.samples[p]||0),0);
+  const sampleValue = P_IDS.reduce((a,p)=>a+(S.samples[p]||0)*prod(p).price,0);
+  const avgPrice = sold>0 ? (rev-disc)/sold : 0;
+  const hrs = hoursWorked(MY_MARKET);
+
+  const vOk = Math.abs(variance) <= 6;
+  const vClass = vOk ? "good" : (Math.abs(variance) <= 20 ? "warn" : "bad");
+  const vLabel = vOk ? "Money matches" : (variance<0 ? `${money2(Math.abs(variance))} short` : `${money2(variance)} over`);
+
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">${esc(fmtDate(TODAY))} \u00B7 ${esc(MY_MARKET.name)}</div>
+      <h1 class="page" style="margin-top:6px">Day's done</h1>
+    </div>
+
+    <div class="card">
+      <div class="card-pad">
+        <div class="lbl">The shop owes you</div>
+        <div class="big" style="margin-top:8px">${money2(owed)}</div>
+        <p class="note" style="margin-top:8px">${money2(owed/hrs)}/hr across the whole ${hrs.toFixed(1)}-hour day, door to door</p>
+      </div>
+      <div class="card-pad" style="padding-top:0">
+        <div class="kv"><span class="kv-k">Commission &mdash; ${sold} packs at 15%</span><span class="kv-v">${money2(commission)}</span></div>
+        ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?" both ways":" one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
+        ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
+        ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
+        <div class="kv kv-total"><span class="kv-k">Total</span><span class="kv-v">${money2(owed)}</span></div>
+      </div>
+    </div>
+    ${fromOwn ? `<div class="hint">The ${money2(fromOwn)} you fronted is on top of your commission &mdash; that's money back, not pay.</div>` : ""}
+
+    <div class="card stripe stripe-${vClass}">
+      <div class="card-hd"><h3>The money check</h3><span class="pill pill-${vClass}">${esc(vLabel)}</span></div>
+      <div class="card-pad" style="padding-top:4px">
+        <div class="kv"><span class="kv-k">${sold} packs at full price</span><span class="kv-v">${money2(rev)}</span></div>
+        ${disc ? `<div class="kv"><span class="kv-k">Deals you gave</span><span class="kv-v">&minus;${money2(disc)}</span></div>` : ""}
+        ${fromTill ? `<div class="kv"><span class="kv-k">Paid out of the till</span><span class="kv-v">&minus;${money2(fromTill)}</span></div>` : ""}
+        <div class="kv"><span class="kv-k"><b>Should have</b></span><span class="kv-v">${money2(expected)}</span></div>
+        <div class="kv"><span class="kv-k">Cash counted</span><span class="kv-v">${money2(cash)}</span></div>
+        <div class="kv"><span class="kv-k">Square</span><span class="kv-v">${money2(card)}</span></div>
+        <div class="kv kv-total"><span class="kv-k">Actually have</span><span class="kv-v">${money2(inHand)}</span></div>
+      </div>
+    </div>
+
+    ${!vOk ? `<div class="hint"><b>Off by ${money2(Math.abs(variance))}.</b> Deals and anything paid out are already counted above, so this is something else \u2014 usually a recount. Worth a look before you drive off.</div>`:""}
+
+    <div class="tiles">
+      <div class="tile"><div class="lbl">Going back</div><div class="mid">${returning}</div><div class="tile-sub">to the freezer</div></div>
+      <div class="tile"><div class="lbl">Avg per pack</div><div class="mid">${money2(avgPrice)}</div><div class="tile-sub">full price ${money2(sold>0?rev/sold:0)}</div></div>
+      <div class="tile"><div class="lbl">Samples</div><div class="mid">${samples}</div><div class="tile-sub">${money2(sampleValue)} given</div></div>
+      <div class="tile"><div class="lbl">Sell-through</div><div class="mid">${openedTotal()>0?Math.round(sold/openedTotal()*100):0}%</div><div class="tile-sub">of what you took</div></div>
+    </div>
+
+    <div class="card card-pad stack-sm">
+      <div class="lbl">Sent to the shop</div>
+      <p class="note">Counts, money, weather, and your notes went up automatically. Nobody has to retype anything.</p>
+      <div class="chips" style="margin-top:4px">
+        ${PRODUCTS.map(p=>`<span class="chip">${esc(p.short)} ${soldByCount(p.id)} sold \u00B7 ${S.closing[p.id]||0} back</span>`).join("")}
+      </div>
+    </div>
+
+    <div class="card stripe stripe-good">
+      <div class="card-hd">
+        <div><h3>Sent in</h3><div class="sub" style="margin-top:3px">${esc(S.submittedAt||"")}</div></div>
+        <span class="pill pill-good">Locked</span>
+      </div>
+      <div class="card-pad stack-sm">
+        <p class="note">These numbers are final. Nothing in here can be quietly changed now.</p>
+        ${S.corrections.length ? `<div class="chips">${S.corrections.map(c=>`<span class="chip chip-hi">fix asked ${esc(c.at)}</span>`).join("")}</div>` : ""}
+        ${S.showFix
+          ? `<div class="field" style="margin-top:6px">
+               <label class="lbl" for="fixBox">What's wrong?</label>
+               <textarea id="fixBox" placeholder="Counted 15 rajas but wrote 51"></textarea>
+             </div>
+             <div class="row" style="gap:8px">
+               <button class="btn btn-sm" data-act="fix-send" style="flex:2">Ask the shop to fix it</button>
+               <button class="btn btn-quiet btn-sm" data-act="toggle" data-flag="showFix" style="flex:1">Cancel</button>
+             </div>
+             <div class="hint">The shop sees what you first sent <b>and</b> what you're asking to change. Nothing gets overwritten.</div>`
+          : `<button class="btn btn-quiet" data-act="toggle" data-flag="showFix">Something's wrong with these numbers</button>`}
+      </div>
+    </div>
+
+    <div style="text-align:center;padding-top:10px">
+      <button class="btn btn-quiet" data-act="reset" style="width:auto;margin:0 auto;opacity:.65">Demo: start a fresh day</button>
+      <p class="note" style="margin-top:7px;font-size:11px">Demo control only. The real app has no way to redo a day.</p>
+    </div>
+  </div>`;
+}
+
+/* =========================================================
+   OWNER SCREENS
+   ========================================================= */
+
+function liveDay(plan){
+  // fabricate a plausible in-progress or finished day for the owner view
+  if(plan.sellerId==="you"){
+    const closed = S.screen==="result";
+    let status = "Not started";
+    if(closed) status="Closed";
+    else if(S.photo) status="Set up "+(S.arrivedAt||"");
+    else if(openedTotal()>0) status="Loaded";
+    return { name:"You", phone:null, sold: closed?soldTotal():null, rev: closed?revenueTotal():null,
+             status, live:!closed && !!S.photo, variance:null, out:openedTotal(),
+             overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
+             fixes: S.corrections.length,
+             packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
+             owed: closed ? (revenueTotal()*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
+  }
+  const m = mkt(plan.marketId), s = slr(plan.sellerId);
+  const seed = mulberry32(plan.marketId.length*977 + plan.sellerId.length*31 + 7);
+  const done = plan.status==="done";
+  const sold = done ? Math.round(100*m.size*sellerMult(plan.sellerId,plan.marketId)*(0.95+seed()*0.12)) : null;
+  const rev = done ? sold*12.7 : null;
+  const sendListQty = recommendMarket(plan.marketId).total;
+  // sellers normally take exactly what the send list says; deviations should be rare enough to mean something
+  const out = plan.marketId==="ferry" ? sendListQty-24 : sendListQty;
+  const hash = [...plan.marketId].reduce((a,c)=>a+c.charCodeAt(0),0);
+  const setupAt = ["7:12am","6:38am","7:41am","7:26am","6:52am"][hash % 5];
+  const sendList = sendListQty;
+  return { name:s.name, phone:s.phone, sold, rev, out,
+           status: done ? "Closed" : "Set up "+setupAt,
+           live: !done, variance: done ? (plan.sellerId==="danny"?-31:-2) : null,
+           overSend: out - sendList, fixes:0,
+           owed: done ? sold*12.7*COMMISSION : 0 };
+}
+
+function owner_market(mid){
+  const m = mkt(mid);
+  const days = HISTORY.filter(d=>d.marketId===mid);
+  const st = days.map(dayStats);
+  const rev = st.reduce((a,x)=>a+x.revenue,0)/st.length;
+  const vc = vanCostFor(mid);
+  const dayCost = m.fee + vc.gas;
+  const hrs = hoursWorked(m);
+  const perHr = (rev - dayCost)/hrs;
+  const recent = st.slice(-3).reduce((a,x)=>a+x.revenue,0)/3;
+  const older  = st.slice(0,3).reduce((a,x)=>a+x.revenue,0)/3;
+  const trend = (recent/older-1)*100;
+  const rec = recommendMarket(mid);
+  const plan = TODAY_PLAN.find(p=>p.marketId===mid);
+  const d = plan ? liveDay(plan) : null;
+  const mine = mid==="temes" && S.photo;
+
+  const rows = days.slice().reverse().map(x=>{
+    const k = dayStats(x);
+    const off = Math.abs(k.variance) > 15;
+    return `<tr>
+      <td><div class="who">${esc(fmtShort(x.dateObj))}</div><div class="sub">${esc(slr(x.sellerId).name)}</div></td>
+      <td class="n">${k.sold}</td>
+      <td class="n">${money(k.revenue)}</td>
+      <td class="n"><span class="sub">${esc(x.weather.t)} ${x.weather.temp}&deg;</span></td>
+      <td class="n">${off?`<span class="pill pill-bad">${money2(Math.abs(k.variance))}</span>`:`<span class="pill pill-good">ok</span>`}</td>
+    </tr>`;
+  }).join("");
+
+  return `<div class="pad stack">
+    <button class="btn btn-quiet" data-act="market-close" style="width:auto">&larr; Back to today</button>
+
+    <div>
+      <h1 class="page">${esc(m.name)}</h1>
+      <p class="note" style="margin-top:5px">${esc(m.city)} &middot; ${esc(m.hours)} &middot; Stall ${esc(m.stall)}</p>
+    </div>
+
+    ${d ? `<div class="card stripe stripe-${d.status==="Closed"?"good":"live"}">
+      <div class="card-hd">
+        <div><h3>Today</h3><div class="sub" style="margin-top:3px">${esc(d.name)}</div></div>
+        <span class="pill ${d.status==="Closed"?"pill-good":"pill-live"}">${esc(d.status)}</span>
+      </div>
+      ${mine ? `<img src="${S.photo}" alt="Booth setup today" style="display:block;width:100%;height:auto">` : ""}
+      <div class="card-pad row" style="gap:26px">
+        ${d.status==="Closed"
+          ? `<div><div class="lbl">Packs</div><div class="mid" style="margin-top:5px">${d.sold}</div></div>
+             <div><div class="lbl">Money</div><div class="mid" style="margin-top:5px">${money(d.rev)}</div></div>`
+          : `<div><div class="lbl">Took out</div><div class="mid" style="margin-top:5px">${d.out||0}</div></div>
+             <div><div class="lbl">Reports at</div><div class="mid" style="margin-top:5px">close</div></div>`}
+        ${d.phone ? `<a class="btn btn-quiet btn-sm" href="sms:${esc(d.phone.replace(/[^0-9+]/g,""))}" style="margin-left:auto;text-decoration:none">Text ${esc(d.name.split(" ")[0])}</a>` : ""}
+      </div>
+    </div>` : ""}
+
+    <div class="tiles">
+      <div class="tile"><div class="lbl">Average day</div><div class="mid">${money(rev)}</div><div class="tile-sub">last ${days.length} times</div></div>
+      <div class="tile"><div class="lbl">Per hour</div><div class="mid">${money(perHr)}</div><div class="tile-sub">${hrs.toFixed(1)} hrs door to door</div></div>
+      <div class="tile"><div class="lbl">Costs</div><div class="mid">${money(dayCost)}</div><div class="tile-sub">${money(m.fee)} stall + ${money(vc.gas)} gas</div></div>
+      <div class="tile"><div class="lbl">Trend</div><div class="mid ${trend>=0?"up":"down"}">${trend>=0?"+":""}${trend.toFixed(0)}%</div><div class="tile-sub">last 3 vs first 3</div></div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>Send here this week</h3><span class="pill pill-live">${rec.total} packs</span></div>
+      ${PRODUCTS.map(p=>`<div class="step-row">
+        <div class="grow"><div class="step-name">${esc(p.name)}</div></div>
+        <div class="mid">${rec.byProduct[p.id].qty}</div>
+      </div>`).join("")}
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>The details</h3></div>
+      <div class="card-pad">
+        <div class="kv"><span class="kv-k">Load-in</span><span class="kv-v">${esc(m.loadIn)}</span></div>
+        <div class="kv"><span class="kv-k">Stall</span><span class="kv-v">${esc(m.stall)}</span></div>
+        <div class="kv"><span class="kv-k">Stall fee</span><span class="kv-v">${money(m.fee)}</span></div>
+        <div class="kv"><span class="kv-k">Drive</span><span class="kv-v">${m.driveMin} min each way</span></div>
+        <div class="kv"><span class="kv-k">Market manager</span><span class="kv-v">${esc(m.manager)}</span></div>
+        <div class="kv"><span class="kv-k">Phone</span><span class="kv-v"><a href="tel:${esc(m.phone.replace(/[^0-9+]/g,""))}" style="color:var(--accent);text-decoration:none">${esc(m.phone)}</a></span></div>
+        <div class="kv"><span class="kv-k">Van</span><span class="kv-v">${vc.shareNames.length?"shares with "+esc(vc.shareNames.join(", ")):"own trip"}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>Every day here</h3><span class="pill">${days.length} logged</span></div>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>Day</th><th class="n">Packs</th><th class="n">Money</th><th class="n">Weather</th><th class="n">Till</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>
+
+    <div class="card card-pad stack-sm">
+      <div class="lbl">Setup photos</div>
+      ${mine
+        ? `<p class="note">Today's is above. Older ones appear here once sellers have been checking in with the app.</p>`
+        : `<p class="note">Every seller's setup photo lands here, with the time it was taken. Nothing yet for this market.</p>`}
+    </div>
+  </div>`;
+}
+
+function owner_today(){
+  const cards = TODAY_PLAN.map(plan=>{
+    const m = mkt(plan.marketId);
+    const d = liveDay(plan);
+    const closed = d.status==="Closed";
+    const stripe = closed ? (d.variance!==null && Math.abs(d.variance)>20 ? "bad" : "good") : (d.live ? "live" : "");
+    const pill = closed
+      ? (d.variance!==null && Math.abs(d.variance)>20
+          ? `<span class="pill pill-bad">${money2(Math.abs(d.variance))} short</span>`
+          : `<span class="pill pill-good">Closed \u00B7 clean</span>`)
+      : d.live
+        ? `<span class="pill pill-live"><span class="dot"></span>${esc(d.status)}</span>`
+        : `<span class="pill">${esc(d.status)}</span>`;
+    return `<div class="card stripe stripe-${stripe}" data-market="${m.id}" style="cursor:pointer">
+      <div class="card-hd">
+        <div><h3>${esc(m.name)}</h3>
+          <div class="sub" style="margin-top:3px">
+            ${d.phone
+              ? `<a href="sms:${esc(d.phone.replace(/[^0-9+]/g,""))}" style="color:var(--accent);text-decoration:none;font-weight:600">${esc(d.name)}</a>`
+              : esc(d.name)} \u00B7 ${esc(m.hours)} \u00B7 <span style="color:var(--accent)">open</span>
+          </div></div>
+        ${pill}
+      </div>
+      <div class="card-pad row" style="gap:26px">
+        ${closed
+          ? `<div><div class="lbl">Packs</div><div class="mid" style="margin-top:5px">${d.sold}</div></div>
+             <div><div class="lbl">Money</div><div class="mid" style="margin-top:5px">${money(d.rev)}</div></div>`
+          : `<div><div class="lbl">Took out</div><div class="mid" style="margin-top:5px">${d.out||0}</div></div>
+             <div><div class="lbl">Reports at</div><div class="mid" style="margin-top:5px">close</div></div>`}
+        <div style="margin-left:auto;text-align:right"><div class="lbl">Stall fee</div><div class="mid" style="margin-top:5px">${money(m.fee)}</div></div>
+      </div>
+      ${(d.overSend || d.fixes || d.packedByOther) ? `<div class="card-pad" style="padding-top:0"><div class="chips">
+        ${d.overSend ? `<span class="chip chip-hi">took ${d.overSend>0?"+":"\u2212"}${Math.abs(d.overSend)} vs send list</span>` : ""}
+        ${d.fixes ? `<span class="chip chip-hi">${d.fixes} correction asked</span>` : ""}
+        ${d.packedByOther ? `<span class="chip chip-hi">cooler packed by ${esc(d.packedByOther)}</span>` : ""}
+      </div></div>` : ""}
+    </div>`;
+  }).join("");
+
+  const all       = TODAY_PLAN.map(liveDay);
+  const closedOnes= all.filter(d=>d.status==="Closed");
+  const totSold   = closedOnes.reduce((a,d)=>a+d.sold,0);
+  const totRev    = closedOnes.reduce((a,d)=>a+d.rev,0);
+  const fees      = TODAY_PLAN.reduce((a,p)=>a+mkt(p.marketId).fee,0);
+  const nClosed   = closedOnes.length, nAll = TODAY_PLAN.length;
+  const dayDriverPay = VAN_RUNS.length * DRIVER_LEG_PAY * 2;   // one drop-off run, both ways
+  const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0) + dayDriverPay;
+
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">${esc(fmtDate(TODAY))}</div>
+      <h1 class="page" style="margin-top:6px">5 markets running</h1>
+      <p class="note" style="margin-top:5px">Numbers land as each market closes out. Nobody is on their phone while they sell.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="lbl">Packs sold</div><div class="mid">${totSold}</div><div class="tile-sub">${nClosed} of ${nAll} closed</div></div>
+      <div class="tile"><div class="lbl">Money in</div><div class="mid">${money(totRev)}</div><div class="tile-sub">cash + card</div></div>
+      <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">${money(dayDriverPay)} driving on top</div></div>
+      <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission, driving, money fronted</div></div>
+    </div>
+    ${(()=>{
+      const worst = SELLERS.map(s=>({s, r:cashRecord(s.id)}))
+        .filter(x=>x.r.bad>0).sort((a,b)=>a.r.avgShort-b.r.avgShort)[0];
+      if(!worst) return "";
+      const others = SELLERS.filter(s=>s.id!==worst.s.id).reduce((a,s)=>a+cashRecord(s.id).bad,0);
+      return `<div class="insight">
+        <div class="insight-mark">Heads up</div>
+        <p><b>${esc(worst.s.name)} has come up short on ${worst.r.bad} of ${worst.r.total} closeouts</b>,
+        averaging ${money2(Math.abs(worst.r.avgShort))} missing each time.
+        ${others===0 ? "Nobody else has been short once." : "Everyone else combined has "+others+"."}
+        Worth a conversation.</p>
+      </div>`;
+    })()}
+    <div class="card">
+      <div class="card-hd"><h3>Message to the crew</h3><span class="pill">${NOTE.trim()?"posted "+esc(NOTE_AT):"nothing posted"}</span></div>
+      <div class="card-pad stack-sm">
+        <div class="field">
+          <textarea id="noteBox" placeholder="Push the rajas today. Run 3 for $33." data-set="ownerNote">${esc(NOTE)}</textarea>
+        </div>
+        <div class="row" style="gap:8px">
+          <button class="btn btn-sm" data-act="note-save" style="flex:2">Post to everyone</button>
+          <button class="btn btn-quiet btn-sm" data-act="note-clear" style="flex:1">Clear</button>
+        </div>
+        <div class="hint">Everyone sees this on their setup screen, before they start selling &mdash; the one time the phone is already in their hand.
+        For something meant for one market only, tap that person's name below and text them.</div>
+      </div>
+    </div>
+
+    <h2 class="sec">Markets</h2>
+    <div class="stack-sm">${cards}</div>
+  </div>`;
+}
+
+function owner_send(){
+  const rows = MARKETS.map(m=>{
+    const r = recommendMarket(m.id);
+    return `<tr>
+      <td><div class="who">${esc(m.name)}</div><div class="sub">${esc(m.city)}</div></td>
+      ${P_IDS.map(pid=>{
+        const rec = r.byProduct[pid];
+        const hi = rec.anySoldOut;
+        return `<td class="n"><span class="chip ${hi?"chip-hi":""}">${rec.qty}</span></td>`;
+      }).join("")}
+      <td class="n" style="font-weight:600">${r.total}</td>
+      <td class="n"><span class="sub">${esc(r.fc?r.fc.t:"")} ${r.fc?r.fc.temp+"&deg;":""}</span>
+        ${r.wx<0.97?`<div class="delta down">${r.total-r.plain}</div>`:""}</td>
+    </tr>`;
+  }).join("");
+
+  const totals = {}; let grand = 0;
+  P_IDS.forEach(pid=>{ totals[pid]=0; });
+  MARKETS.forEach(m=>{ const r=recommendMarket(m.id); P_IDS.forEach(pid=>{ totals[pid]+=r.byProduct[pid].qty; }); grand += r.total; });
+
+  const toMake = {}; let makeTotal = 0;
+  P_IDS.forEach(pid=>{ const n = Math.max(0, totals[pid]-FREEZER[pid]); toMake[pid]=Math.ceil(n/12)*12; makeTotal += toMake[pid]; });
+
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">Week of ${esc(fmtShort(TODAY))}</div>
+      <h1 class="page" style="margin-top:6px">Send list</h1>
+      <p class="note" style="margin-top:5px">Built from the last 4 weeks at each market, by product, rounded to full cases.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>Make this week</h3><span class="pill pill-live">${makeTotal} packs</span></div>
+      <div class="card-pad">
+        ${PRODUCTS.map(p=>`<div class="kv">
+          <span class="kv-k">${esc(p.name)} <span class="sub">\u2014 need ${totals[p.id]}, freezer has ${FREEZER[p.id]}</span></span>
+          <span class="kv-v">${toMake[p.id]}</span>
+        </div>`).join("")}
+        <div class="kv kv-total"><span class="kv-k">Total to make</span><span class="kv-v">${makeTotal}</span></div>
+      </div>
+    </div>
+
+    <div class="insight">
+      <div class="insight-mark">Move first</div>
+      <p><b>Rajas made ${esc(BATCH_AGE.rajas.made)} has been out ${BATCH_AGE.rajas.trips} times.</b> Send that batch to Temescal and Grand Lake this week \u2014 they move rajas fastest \u2014 before it has to be written off.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-hd"><h3>By market</h3><span class="pill">${grand} packs out</span></div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Market</th>${PRODUCTS.map(p=>`<th class="n">${esc(p.short)}</th>`).join("")}<th class="n">Total</th><th class="n">Weather</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="hint">Highlighted numbers are markets that <b>sold out recently</b> \u2014 those get a bigger cushion so you stop losing the last hour.</div>
+    ${(()=>{
+      const wet = MARKETS.map(m=>({m, r:recommendMarket(m.id)})).filter(x=>x.r.wx<0.97);
+      if(!wet.length) return "";
+      const cut = wet.reduce((a,x)=>a+(x.r.plain-x.r.total),0);
+      return `<div class="insight">
+        <div class="insight-mark">Weather</div>
+        <p><b>${wet.map(x=>esc(x.m.name)+" ("+esc(x.r.fc.t.toLowerCase())+")").join(", ")}.</b>
+        That is <b>${cut} fewer packs</b> going out than a clear week, so they do not ride around all day and come back.
+        Slow days at those markets will not count against the seller either &mdash; a rained-out Saturday is left out of their average.</p>
+      </div>`;
+    })()}
+  </div>`;
+}
+
+function owner_people(){
+  const rows = SELLERS.map(s=>{
+    const days = HISTORY.filter(d=>d.sellerId===s.id);
+    let vsSum=0, perHrSum=0, varSum=0, n=0, off=0;
+    days.forEach(d=>{
+      const st = dayStats(d);
+      const peers = HISTORY.filter(x=>x.marketId===d.marketId);
+      const peerAvg = peers.reduce((a,x)=>a+dayStats(x).sold,0)/peers.length;
+      vsSum += (st.sold/peerAvg - 1);
+      perHrSum += st.revenue/st.hrs;
+      varSum += st.variance; if(Math.abs(st.variance)>15) off++;
+      n++;
+    });
+    const vs = (vsSum/n)*100;
+    const perHr = perHrSum/n;
+    const acc = 100 - (off/n)*100;
+    return { s, vs, perHr, acc, n, days };
+  }).sort((a,b)=>b.vs-a.vs);
+
+  const body = rows.map(r=>`<tr>
+    <td><div class="who">${esc(r.s.name)}</div><div class="sub">${r.n} market days</div></td>
+    <td class="n"><span class="delta ${r.vs>=0?"up":"down"}">${r.vs>=0?"+":""}${r.vs.toFixed(0)}%</span></td>
+    <td class="n">${money(r.perHr)}</td>
+    <td class="n">${r.acc>=90?`<span class="pill pill-good">${r.acc.toFixed(0)}%</span>`:`<span class="pill pill-warn">${r.acc.toFixed(0)}%</span>`}</td>
+  </tr>`).join("");
+
+  return `<div class="pad stack">
+    <div>
+      <h1 class="page">People</h1>
+      <p class="note" style="margin-top:5px">Each person is measured against what that market normally does \u2014 not against each other. A big market doesn't make you a better seller.</p>
+    </div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Seller</th><th class="n">vs market avg</th><th class="n">$/hour</th><th class="n">Cash accuracy</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>
+    ${(()=>{
+      const sw = bestSwap();
+      if(!sw || sw.gain < 40) return "";
+      const aS=slr(sw.a.sellerId), bS=slr(sw.b.sellerId), aM=mkt(sw.a.marketId), bM=mkt(sw.b.marketId);
+      const pct = (s,m)=>{ const v=Math.round(perfPct(s,m)*100); return (v>0?"+":v<0?"\u2212":"")+Math.abs(v)+"%"; };
+      // whoever gains more by moving to the other's market goes first
+      return `<div class="insight">
+        <div class="insight-mark">Swap these two</div>
+        <p>At <b>${esc(bM.name)}</b>, ${esc(aS.name)} runs <b>${pct(aS.id,bM.id)}</b> against that market's own average and
+        ${esc(bS.name)} runs <b>${pct(bS.id,bM.id)}</b>. Today they're booked the other way around &mdash;
+        ${esc(bS.name)} has ${esc(bM.name)} and ${esc(aS.name)} has ${esc(aM.name)}.
+        Trading them is worth about <b>${money(sw.gain)}</b> today.</p>
+      </div>`;
+    })()}
+    <div class="card">
+      <div class="card-hd"><h3>This week's pay</h3><span class="pill">15% of sales</span></div>
+      <div class="card-pad">
+        ${SELLERS.map(s=>{
+          const wk = HISTORY.filter(d=>d.sellerId===s.id).slice(-2);
+          const amt = wk.reduce((a,d)=>a+dayStats(d).commission,0);
+          return `<div class="kv"><span class="kv-k">${esc(s.name)} <span class="sub">\u2014 ${wk.length} days</span></span><span class="kv-v">${money2(amt)}</span></div>`;
+        }).join("")}
+        <div class="kv kv-total"><span class="kv-k">Total payroll</span><span class="kv-v">${money2(SELLERS.reduce((a,s)=>a+HISTORY.filter(d=>d.sellerId===s.id).slice(-2).reduce((b,d)=>b+dayStats(d).commission,0),0))}</span></div>
+      </div>
+    </div>
+    <div class="hint">Sellers see this same screen for themselves. Same math on both phones, so there's nothing to argue about on payday.</div>
+  </div>`;
+}
+
+function owner_markets(){
+  const rows = MARKETS.map(m=>{
+    const days = HISTORY.filter(d=>d.marketId===m.id);
+    const st = days.map(dayStats);
+    const rev = st.reduce((a,x)=>a+x.revenue,0)/st.length;
+    const perHr = st.reduce((a,x)=>a+x.perHr,0)/st.length;
+    const recent = st.slice(-3).reduce((a,x)=>a+x.revenue,0)/3;
+    const older  = st.slice(0,3).reduce((a,x)=>a+x.revenue,0)/3;
+    const trend = (recent/older-1)*100;
+    const hrs = hoursWorked(m);
+    const vc = vanCostFor(m.id);
+    const dayCost = m.fee + vc.gas;
+    const soloCost = m.fee + gasFor(m.driveMin);   // what it would cost on its own trip
+    const perHrTrue = (rev - dayCost)/hrs;
+    return { m, rev, perHr:perHrTrue, trend, hrs,
+             rideCost:vc.ride, gas:vc.gas, dayCost, soloCost,
+             shareNames:vc.shareNames, rider:vc.rider,
+             soloPerHr:(rev - soloCost)/hrs,
+             sold: st.reduce((a,x)=>a+x.sold,0)/st.length };
+  }).sort((a,b)=>b.perHr-a.perHr);
+
+  const best = rows[0], worst = rows[rows.length-1];
+
+  const body = rows.map(r=>`<tr data-market="${r.m.id}" style="cursor:pointer">
+    <td><div class="who" style="color:var(--accent)">${esc(r.m.name)}</div><div class="sub">${esc(r.m.city)} \u00B7 ${r.m.driveMin}min drive</div></td>
+    <td class="n">${money(r.rev)}</td>
+    <td class="n">${money(r.dayCost)}${r.shareNames.length?`<div class="sub">shares a van</div>`:""}</td>
+    <td class="n">${r.hrs.toFixed(1)}</td>
+    <td class="n" style="font-weight:600">${money(r.perHr)}</td>
+    <td class="n"><span class="delta ${r.trend>=0?"up":"down"}">${r.trend>=0?"\u25B2":"\u25BC"} ${Math.abs(r.trend).toFixed(0)}%</span></td>
+  </tr>`).join("");
+
+  return `<div class="pad stack">
+    <div>
+      <h1 class="page">Markets</h1>
+      <p class="note" style="margin-top:5px">Sorted by what each one actually pays per hour worked \u2014 including packing, driving both ways, setup and teardown. Not just the four hours of selling.</p>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="lbl">Best per hour</div><div class="mid">${money(best.perHr)}</div><div class="tile-sub">${esc(best.m.name)}</div></div>
+      <div class="tile"><div class="lbl">Worst per hour</div><div class="mid">${money(worst.perHr)}</div><div class="tile-sub">${esc(worst.m.name)}</div></div>
+      <div class="tile"><div class="lbl">Weekly revenue</div><div class="mid">${money(rows.reduce((a,r)=>a+r.rev,0))}</div><div class="tile-sub">5 markets</div></div>
+      <div class="tile"><div class="lbl">Weekly costs</div><div class="mid">${money(rows.reduce((a,r)=>a+r.dayCost,0))}</div><div class="tile-sub">stalls, gas, rides</div></div>
+    </div>
+    <div class="card">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Market</th><th class="n">Avg day</th><th class="n">Costs</th><th class="n">Hours</th><th class="n">Per hour</th><th class="n">Trend</th></tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>
+    ${(()=>{
+      const run = VAN_RUNS[0];
+      if(!run) return "";
+      const all = [run.driver].concat(run.riders);
+      const soloGas = all.reduce((a,id)=>a+gasFor(mkt(id).driveMin), 0);
+      const saved   = soloGas - gasFor(mkt(run.driver).driveMin);
+      const riderNames = run.riders.map(id=>mkt(id).name).join(" and ");
+      const driverName = mkt(run.driver).name;
+      return `<div class="insight">
+        <div class="insight-mark">These two go together</div>
+        <p><b>${esc(driverName)} and ${esc(riderNames)} go out on one van.</b>
+        Whoever is going furthest drives and drops the other off on the way, so the shop buys that gas once
+        &mdash; two separate trips would burn about <b>${money(saved)}</b> more every time, which is why
+        both markets look cheaper to run than they would alone.
+        If you ever drop ${esc(driverName)}, ${esc(riderNames)} needs its own trip
+        &mdash; look at it again before you keep it.</p>
+      </div>`;
+    })()}
+
+    <div class="insight">
+      <div class="insight-mark">Worth a look</div>
+      <p><b>${esc(worst.m.name)} takes ${worst.hrs.toFixed(1)} hours door to door and pays ${money(worst.perHr)} an hour</b> once the ${money(worst.dayCost)} it costs to run comes out${worst.rideCost?" \u2014 stall, gas and the $20 driver run":" \u2014 stall and gas"}, against ${money(best.perHr)} at ${esc(best.m.name)}. On revenue alone it looks fine, which is why it's easy to miss.</p>
+    </div>
+    <div class="hint">Costs here are what the <b>market</b> takes: stall fee and gas. Driver pay, commission and anything the crew fronts are payroll &mdash; those sit on the Today screen under what the shop owes.</div>
+  </div>`;
+}
+
+/* =========================================================
+   Render + events
+   ========================================================= */
+
+const SELLER_SCREENS = { today:[scr_today,foot_today], loadout:[scr_loadout,foot_loadout],
+  market:[scr_market,foot_market],
+  closeout:[scr_closeout,foot_closeout], result:[scr_result,null] };
+
+const OWNER_TABS = [["today","Today"],["send","Send list"],["people","People"],["markets","Markets"]];
+const OWNER_SCREENS = { today:owner_today, send:owner_send, people:owner_people, markets:owner_markets };
+
+/* The sticky footer is fixed, so it sits outside the flow and reserves no room
+   on its own. Its height changes with the screen -- one button on Today, two
+   stacked once you are at the market -- so any fixed padding is either wasted
+   space or a clipped last line. Measure the footer we actually rendered. */
+function syncFootSpace(){
+  const bar = $("footHost").firstElementChild;
+  $("app").style.paddingBottom = bar ? (bar.offsetHeight + 14) + "px" : "";
+}
+
+
+function render(){
+  const app = $("app"), foot = $("footHost"), tabs = $("tabsHost");
+  $("m-seller").setAttribute("aria-pressed", S.mode==="seller");
+  $("m-owner").setAttribute("aria-pressed", S.mode==="owner");
+  $("brandsub").textContent = S.mode==="seller" ? "Seller" : "Owner";
+
+  if(S.mode==="owner"){
+    app.className = "shell wide";
+    tabs.innerHTML = `<div class="tabs"><div class="tabs-in">${
+      OWNER_TABS.map(([k,l])=>`<button data-tab="${k}" aria-pressed="${S.tab===k}">${l}</button>`).join("")
+    }</div></div>`;
+    app.innerHTML = S.marketOpen ? owner_market(S.marketOpen) : OWNER_SCREENS[S.tab]();
+    foot.innerHTML = "";
+  } else {
+    app.className = "shell";
+    tabs.innerHTML = "";
+    const [body, ft] = SELLER_SCREENS[S.screen] || SELLER_SCREENS.today;
+    app.innerHTML = body();
+    foot.innerHTML = ft ? `<div class="sticky-foot"><div class="sticky-foot-in">${ft()}</div></div>` : "";
+  }
+  syncFootSpace();
+  save();
+}
+
+// Orientation change and the on-screen keyboard both resize the footer.
+window.addEventListener("resize", syncFootSpace);
+
+document.addEventListener("click", e => {
+  if(e.target.closest("a")) return;          // let phone and text links through
+
+  const opener = e.target.closest("[data-market]");
+  if(opener && !e.target.closest("button")){
+    S.marketOpen = opener.dataset.market; render(); window.scrollTo(0,0); return;
+  }
+
+  const t = e.target.closest("button");
+  if(!t) return;
+  if(t.dataset.act==="market-close"){ S.marketOpen=null; render(); window.scrollTo(0,0); return; }
+
+  if(t.id==="m-seller"){ S.mode="seller"; S.marketOpen=null; render(); return; }
+  if(t.id==="m-owner"){ S.mode="owner"; render(); return; }
+
+  const tab = t.dataset.tab;
+  if(tab){ S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0); return; }
+
+  const go = t.dataset.go;
+  if(go){
+    if(go==="loadout"){ P_IDS.forEach(p=>{ if(S.opening[p]==null) S.opening[p]=MY_REC.byProduct[p].qty; }); }
+    if(go==="market" && !S.packedAt){
+      S.packedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+    }
+    if(go==="result"){
+      S.status="closed"; S.endedAt=Date.now();
+      if(!S.submittedAt) S.submittedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+    }
+    S.screen = go; render(); window.scrollTo(0,0); return;
+  }
+
+  const adj = t.dataset.adj;
+  if(adj){
+    const p = t.dataset.p, d = Number(t.dataset.d);
+    const cur = S[adj][p] ?? (adj==="opening" ? MY_REC.byProduct[p].qty : 0);
+    S[adj][p] = Math.max(0, cur + d);
+    render(); return;
+  }
+
+  const sold = t.dataset.sold;
+  if(sold){ S.soldOut = sold==="yes"; render(); return; }
+
+  const act = t.dataset.act;
+  if(act==="toggle"){ const f=t.dataset.flag; S[f]=!S[f]; render(); return; }
+  const pk = t.dataset.packer;
+  if(pk){ S.packedBy = pk; S.showPacker = false; render(); return; }
+  if(act==="jump"){
+    const el = document.querySelector(t.dataset.sel);
+    if(el){
+      el.scrollIntoView({behavior:"smooth", block:"center"});
+      el.classList.remove("flash");
+      void el.offsetWidth;                 // restart the animation
+      el.classList.add("flash");
+      if(el.focus) setTimeout(()=>{ try{ el.focus({preventScroll:true}); }catch(e){} }, 380);
+    }
+    return;
+  }
+  if(act==="note-save"){
+    const b = $("noteBox");
+    NOTE = b ? b.value : NOTE;
+    NOTE_AT = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+    saveNote(); buzz(20); toast(NOTE.trim()?"Posted to everyone":"Message cleared"); render(); return;
+  }
+  if(act==="note-clear"){ NOTE=""; saveNote(); toast("Message cleared"); render(); return; }
+  if(act==="exp-add"){
+    if(!Array.isArray(S.expenses)) S.expenses=[];
+    S.expenses.push({kind:"Gas", amount:"", source:"till"});
+    render(); return;
+  }
+  const esrc = t.dataset.expsrc;
+  if(esrc !== undefined){ S.expenses[Number(esrc)].source = t.dataset.v; render(); return; }
+  const erm = t.dataset.exprm;
+  if(erm !== undefined){ S.expenses[Number(erm)].photo = null; render(); return; }
+  const edel = t.dataset.expdel;
+  if(edel !== undefined){ S.expenses.splice(Number(edel),1); render(); return; }
+  const tm = t.dataset.travel;
+  if(tm){
+    S.travel = Object.assign({}, S.travel, { mode:tm });
+    if(tm!=="van"){ S.travel.legs=0; S.travel.passenger=""; S.travel.marketId=""; }
+    if(tm!=="own"){ S.travel.gasAmount=""; }
+    render(); return;
+  }
+  const gm = t.dataset.gasmode;
+  if(gm){
+    S.travel = Object.assign({}, S.travel, { gasMode:gm });
+    if(gm!=="flat") S.travel.gasAmount="";
+    render(); return;
+  }
+  const legs = t.dataset.legs;
+  if(legs !== undefined){
+    const n = Number(legs);
+    S.travel = Object.assign({}, S.travel, { legs:n });
+    if(n===0){ S.travel.passenger=""; S.travel.marketId=""; }
+    render(); return;
+  }
+  if(act==="retake"){ S.photo=null; S.arrivedAt=null; render(); return; }
+  if(act==="fix-send"){
+    const box = $("fixBox");
+    const v = box ? box.value.trim() : "";
+    if(!v){ toast("Say what's wrong first"); return; }
+    S.corrections.push({ text:v, at:new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}) });
+    S.showFix = false; buzz(20); toast("Sent to the shop"); render(); return;
+  }
+  if(act==="reset"){ reset(); window.scrollTo(0,0); return; }
+});
+
+document.addEventListener("change", e => {
+  if(e.target.id === "photoIn"){
+    const f = e.target.files && e.target.files[0];
+    if(!f) return;
+    readImage(f, 900, 0.7, data => {
+      S.photo = data;
+      S.arrivedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+      buzz(30); toast("Setup logged at "+S.arrivedAt); render();
+    });
+    return;
+  }
+  const el = e.target;
+
+  const pf = el.dataset.photofor;
+  if(pf !== undefined){
+    const f = el.files && el.files[0];
+    if(!f) return;
+    readImage(f, 700, 0.6, data => {
+      const row = S.expenses[Number(pf)];
+      if(row){ row.photo = data; buzz(20); toast("Receipt attached"); render(); }
+    });
+    return;
+  }
+
+  const ei = el.dataset.exp;
+  if(ei !== undefined){
+    const row = S.expenses[Number(ei)];
+    if(row){ row[el.dataset.f] = el.dataset.f==="amount" ? el.value : el.value; render(); }
+    return;
+  }
+
+  const key = el.dataset.set;
+  if(!key) return;
+  if(key==="ownerNote"){ NOTE = el.value; return; }
+  if(key==="passenger"){ S.travel = Object.assign({}, S.travel, {passenger:el.value}); render(); return; }
+  if(key==="passengerMarket"){ S.travel = Object.assign({}, S.travel, {marketId:el.value}); render(); return; }
+  if(key==="gasAmount"){ S.travel = Object.assign({}, S.travel, {gasAmount:el.value}); render(); return; }
+  if(key==="opening" || key==="closing"){
+    S[key][el.dataset.p] = Math.max(0, Math.round(Number(el.value)||0));
+    render();
+  } else {
+    S[key] = el.value;
+    if(key==="cashCounted"||key==="cardTotal") render();
+  }
+});
+
+render();
+})();
+</script>
+
+<script>
+/* Offline support. Needs http/https, so this quietly does nothing when the
+   file is opened straight off disk - the app still works, just without the
+   cache. */
+if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
+  window.addEventListener("load", function(){
+    navigator.serviceWorker.register("./sw.js").catch(function(){ /* not fatal */ });
+  });
+}
+</script>
+</body>
+</html>
