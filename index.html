@@ -646,15 +646,33 @@ th.n{text-align:right}
    Seed data \u2014 realistic Bay Area operation
    ========================================================= */
 
+/* The real range, from the people who pack the coolers. Every pack is two
+   tamales and every pack is $15 - the price does not move by market.
+   All eleven are normal stock, though any one of them might simply not get
+   made on a given day, so nothing here should assume eleven every morning.
+
+   caseSize is 1 on purpose. The old value of 12 was invented, and rounding a
+   send list up to a case nobody packs in just inflates every number. If they
+   turn out to pack in dozens, this is the one line to change. */
 const PRODUCTS = [
-  { id:"verde", name:"Pork Chile Verde", short:"Verde", price:13, caseSize:12 },
-  { id:"mole",  name:"Chicken Mole",     short:"Mole",  price:13, caseSize:12 },
-  { id:"rajas", name:"Rajas con Queso",  short:"Rajas", price:12, caseSize:12 }
+  { id:"chilicorn",  name:"Cheese Chili Corn",   short:"Chili corn",  price:15, caseSize:1 },
+  { id:"cheddar",    name:"Smoked Cheddar",      short:"Cheddar",     price:15, caseSize:1 },
+  { id:"beancheese", name:"Bean and Cheese",     short:"Bean &amp; cheese", price:15, caseSize:1 },
+  { id:"goat",       name:"Goat Cheese",         short:"Goat cheese", price:15, caseSize:1 },
+  { id:"veggie",     name:"Summer Veggie",       short:"Summer veggie", price:15, caseSize:1 },
+  { id:"cauli",      name:"Spicy Cauliflower",   short:"Cauliflower", price:15, caseSize:1 },
+  { id:"chicken",    name:"Chicken",             short:"Chicken",     price:15, caseSize:1 },
+  { id:"beef",       name:"Beef and Cheese",     short:"Beef",        price:15, caseSize:1 },
+  { id:"pumpkin",    name:"Pumpkin",             short:"Pumpkin",     price:15, caseSize:1 },
+  { id:"beans",      name:"Red and Black Beans", short:"Red &amp; black", price:15, caseSize:1 },
+  { id:"breakfast",  name:"Breakfast",           short:"Breakfast",   price:15, caseSize:1 }
 ];
+const TAMALES_PER_PACK = 2;
+const PACKS_PER_COOLER = 50;   // rough, from the shop
 const P_IDS = PRODUCTS.map(p=>p.id);
 const prod = id => PRODUCTS.find(p=>p.id===id);
 
-const COMMISSION = 0.15;      // 15% of sales
+const COMMISSION = 0.20;      // 20% of the day's total - what the sellers say they actually take
 const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
 const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
 
@@ -698,13 +716,20 @@ const SELLERS = [
 const slr = id => SELLERS.find(s=>s.id===id);
 
 // Product mix differs by market \u2014 the app should find this
-const MIX = {
-  grand:  { verde:0.34, mole:0.44, rajas:0.22 },
-  ferry:  { verde:0.29, mole:0.50, rajas:0.21 },
-  temes:  { verde:0.38, mole:0.36, rajas:0.26 },
-  sanmat: { verde:0.47, mole:0.28, rajas:0.25 },
-  marin:  { verde:0.31, mole:0.41, rajas:0.28 }
-};
+/* Placeholder demand mix. Which flavours move at which market can only come
+   from real recorded days - this is seeded noise so the send list has
+   something to work on until then. Do not hand-tune it; replace it. */
+const MIX = (()=>{
+  const out = {};
+  MARKETS.forEach((m, mi) => {
+    const r = mulberry32(9001 + mi*131);
+    const w = P_IDS.map(() => 0.55 + r());
+    const tot = w.reduce((a,b)=>a+b, 0);
+    out[m.id] = {};
+    P_IDS.forEach((pid, i) => out[m.id][pid] = w[i]/tot);
+  });
+  return out;
+})();
 // Urban-leaning markets, for seller affinity
 const URBAN = { ferry:1, grand:1, temes:0.4, sanmat:0, marin:0.15 };
 
@@ -858,8 +883,22 @@ function recommendMarket(marketId){
 }
 
 /* ---- freezer stock ---- */
-const FREEZER = { verde:148, mole:96, rajas:132 };
-const BATCH_AGE = { verde:{made:"Aug 19", trips:2}, mole:{made:"Aug 22", trips:1}, rajas:{made:"Aug 8", trips:5} };
+/* Placeholder stock and batch ages - real ones come from the shop. Shelf life
+   is two weeks, so how many trips a batch has already made is what decides
+   which one gets pushed first. */
+const FREEZER = (()=>{
+  const out={}, r=mulberry32(7717);
+  P_IDS.forEach(pid => out[pid] = 60 + Math.round(r()*120));
+  return out;
+})();
+const BATCH_AGE = (()=>{
+  const out={}, r=mulberry32(4242);
+  const made = ["Aug 26","Aug 28","Aug 30","Sep 1","Sep 2","Sep 4"];
+  P_IDS.forEach(pid => out[pid] = { made: made[Math.floor(r()*made.length)], trips: Math.floor(r()*6) });
+  return out;
+})();
+// The batch that has been out the most times: the one to move today.
+const OLDEST = P_IDS.slice().sort((a,b) => BATCH_AGE[b].trips - BATCH_AGE[a].trips)[0];
 
 /* =========================================================
    Live state (the seller's own day) \u2014 persisted
@@ -867,7 +906,7 @@ const BATCH_AGE = { verde:{made:"Aug 19", trips:2}, mole:{made:"Aug 22", trips:1
 
 const STORE_KEY = "packout.v2";
 const NOTE_KEY  = "packout.note.v1";
-const DEFAULT_NOTE = "Rajas from the Aug 8 batch has to move today \u2014 run it 3 for $33 and lead with it when people walk up. Everything else stays full price.";
+const DEFAULT_NOTE = "Push the oldest batch first today and lead with it when people walk up. Everything else stays full price.";
 let NOTE = DEFAULT_NOTE, NOTE_AT = "6:40am";
 function loadNote(){
   try{ const r = localStorage.getItem(NOTE_KEY); if(r!==null) NOTE = r; }catch(e){}
@@ -880,7 +919,8 @@ const BLANK = {
   screen:"today", mode:"seller", tab:"today",
   status:"assigned",             // assigned -> loaded -> setup -> closed
   arrivedAt:null, photo:null,
-  opening:{}, closing:{}, samples:{verde:0,mole:0,rajas:0}, damaged:{verde:0,mole:0,rajas:0},
+  opening:{}, closing:{},
+  samples:P_IDS.reduce((a,p)=>(a[p]=0,a),{}), damaged:P_IDS.reduce((a,p)=>(a[p]=0,a),{}),
   endedAt:null,
   cashCounted:"", cardTotal:"", float:150,
   soldOut:null, soldOutAt:"", note:"", lead:"",
@@ -1124,8 +1164,8 @@ function scr_today(){
     </div>` : ""}
 
     <div class="hint">
-      Built from your last 4 weeks here, plus a <b>15% cushion</b>, rounded up to full cases of 12.
-      Rajas is the oldest batch \u2014 <b>made ${esc(BATCH_AGE.rajas.made)}, out ${BATCH_AGE.rajas.trips} times</b>. Push it first.
+      Built from your last 4 weeks here, plus a <b>15% cushion</b>.
+      ${esc(prod(OLDEST).short)} is the oldest batch \u2014 <b>made ${esc(BATCH_AGE[OLDEST].made)}, out ${BATCH_AGE[OLDEST].trips} times</b>. Push it first.
     </div>
 
     <div class="card card-pad stack-sm">
@@ -1335,7 +1375,7 @@ function scr_closeout(){
 
     <div class="card card-pad stack">
       <div class="field field-money">
-        <label class="lbl" for="cash">Cash counted (not counting your $150 float)${S.cashCounted===""?` &middot; <span class="needed">needed</span>`:""}</label>
+        <label class="lbl" for="cash">All cash taken, before your pay (not counting your $150 float)${S.cashCounted===""?` &middot; <span class="needed">needed</span>`:""}</label>
         <input id="cash" type="number" inputmode="decimal" placeholder="0" value="${esc(S.cashCounted)}" data-set="cashCounted">
       </div>
       <div class="field field-money">
@@ -1548,7 +1588,7 @@ function scr_result(){
         <p class="note" style="margin-top:8px">out of ${money2(fullPack)} at full price, across ${sold} packs</p>
       </div>
       <div class="card-pad" style="padding-top:0">
-        <div class="kv"><span class="kv-k">Cash counted</span><span class="kv-v">${money2(cash)}</span></div>
+        <div class="kv"><span class="kv-k">Cash taken</span><span class="kv-v">${money2(cash)}</span></div>
         <div class="kv"><span class="kv-k">Square</span><span class="kv-v">${money2(card)}</span></div>
         ${fromTill ? `<div class="kv"><span class="kv-k">Spent out of the till</span><span class="kv-v">${money2(fromTill)}</span></div>` : ""}
         <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(gross)}</span></div>
@@ -1589,7 +1629,7 @@ function scr_result(){
         ${S.showFix
           ? `<div class="field" style="margin-top:6px">
                <label class="lbl" for="fixBox">What's wrong?</label>
-               <textarea id="fixBox" placeholder="Counted 15 rajas but wrote 51"></textarea>
+               <textarea id="fixBox" placeholder="Counted 15 chicken but wrote 51"></textarea>
              </div>
              <div class="row" style="gap:8px">
                <button class="btn btn-sm" data-act="fix-send" style="flex:2">Ask the shop to fix it</button>
@@ -1828,7 +1868,7 @@ function owner_today(){
       <div class="card-hd"><h3>Message to the crew</h3><span class="pill">${NOTE.trim()?"posted "+esc(NOTE_AT):"nothing posted"}</span></div>
       <div class="card-pad stack-sm">
         <div class="field">
-          <textarea id="noteBox" placeholder="Push the rajas today. Run 3 for $33." data-set="ownerNote">${esc(NOTE)}</textarea>
+          <textarea id="noteBox" placeholder="Push the oldest batch today." data-set="ownerNote">${esc(NOTE)}</textarea>
         </div>
         <div class="row" style="gap:8px">
           <button class="btn btn-sm" data-act="note-save" style="flex:2">Post to everyone</button>
@@ -1887,7 +1927,7 @@ function owner_send(){
 
     <div class="insight">
       <div class="insight-mark">Move first</div>
-      <p><b>Rajas made ${esc(BATCH_AGE.rajas.made)} has been out ${BATCH_AGE.rajas.trips} times.</b> Send that batch to Temescal and Grand Lake this week \u2014 they move rajas fastest \u2014 before it has to be written off.</p>
+      <p><b>${esc(prod(OLDEST).short)} made ${esc(BATCH_AGE[OLDEST].made)} has been out ${BATCH_AGE[OLDEST].trips} times.</b> Send that batch to Temescal and Grand Lake this week \u2014 they move it fastest \u2014 before it has to be written off.</p>
     </div>
 
     <div class="card">
