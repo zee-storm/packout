@@ -690,10 +690,10 @@ const MARKETS = [
 const mkt = id => MARKETS.find(m=>m.id===id);
 
 const SELLERS = [
-  { id:"maria", name:"Maria Reyes", phone:"(510) 555-0121",  base:1.16, urban:0.16,  cashSlip:0.02 },
-  { id:"jose",  name:"Jos\u00E9 Luna", phone:"(510) 555-0148",    base:1.04, urban:-0.18, cashSlip:0.03 },
-  { id:"carla", name:"Carla Mendez", phone:"(510) 555-0176", base:0.96, urban:0.02,  cashSlip:0.02 },
-  { id:"danny", name:"Danny Ortiz", phone:"(510) 555-0193",  base:1.01, urban:0.0,   cashSlip:0.14 }
+  { id:"maria", name:"Maria Reyes", phone:"(510) 555-0121",  base:1.16, urban:0.16,  giveRate:0.02 },
+  { id:"jose",  name:"Jos\u00E9 Luna", phone:"(510) 555-0148",    base:1.04, urban:-0.18, giveRate:0.03 },
+  { id:"carla", name:"Carla Mendez", phone:"(510) 555-0176", base:0.96, urban:0.02,  giveRate:0.02 },
+  { id:"danny", name:"Danny Ortiz", phone:"(510) 555-0193",  base:1.01, urban:0.0,   giveRate:0.14 }
 ];
 const slr = id => SELLERS.find(s=>s.id===id);
 
@@ -797,9 +797,14 @@ for(let w=8; w>=1; w--){
     const cardShare = 0.62 + rnd()*0.14;
     const cardTotal = Math.round(revenue*cardShare);
     const expectedCash = revenue - cardTotal;
-    const slip = slr(sid).cashSlip;
-    const off = rnd() < slip ? -(Math.round(rnd()*5)+2)*prod("verde").price/13*8 : 0;
-    const cashCounted = Math.max(0, Math.round(expectedCash + off));
+    // How often packs walk out without money: free fifths, deals the seller
+    // invented, trades with other vendors. Not theft - the owner does not
+    // chase any of it, and none of it can be derived from a count.
+    // Giving away is steady, not occasional: a few free ones most days, the
+    // odd invented deal, a trade with the stall across the aisle. It scales
+    // with how loose a seller is, which is what the yield number surfaces.
+    const given = revenue * slr(sid).giveRate * (0.6 + rnd()*0.8);
+    const cashCounted = Math.max(0, Math.round(expectedCash - given));
 
     HISTORY.push({
       id:`${m.id}-${dISO(date)}`, date:dISO(date), dateObj:date,
@@ -1017,21 +1022,39 @@ function bestSwap(){
   }
   return best;
 }
-function cashRecord(sid){
-  const days = HISTORY.filter(d=>d.sellerId===sid).map(dayStats);
-  const bad = days.filter(d=>d.variance < -15);
-  const avgShort = bad.length ? bad.reduce((a,d)=>a+d.variance,0)/bad.length : 0;
-  return { bad:bad.length, total:days.length, avgShort };
+/* What a seller's packs actually bring in, across everything they have sold.
+   This replaces counting short tills. With free fifths, invented deals and
+   trades all in play, "came up short" was measuring the discount rather than
+   the person - and would have called honest sellers thieves on day one. */
+function yieldRecord(sid){
+  const days  = HISTORY.filter(d=>d.sellerId===sid).map(dayStats);
+  const sold  = days.reduce((a,d)=>a+d.sold,0);
+  const money = days.reduce((a,d)=>a+d.money_in,0);
+  const full  = days.reduce((a,d)=>a+d.revenue,0);
+  return { days:days.length, sold, money, full, given:full-money,
+           per: sold?money/sold:0, fullPer: sold?full/sold:0 };
+}
+
+// The whole crew's money per pack, so one seller can be read against the rest.
+function crewYield(){
+  const all  = HISTORY.map(dayStats);
+  const sold = all.reduce((a,d)=>a+d.sold,0);
+  return sold ? all.reduce((a,d)=>a+d.money_in,0)/sold : 0;
 }
 
 function dayStats(d){
   const sold = P_IDS.reduce((a,p)=>a+(d.opening[p]-d.closing[p]-d.samples[p]-d.damaged[p]),0);
   const revenue = P_IDS.reduce((a,p)=>a+(d.opening[p]-d.closing[p]-d.samples[p]-d.damaged[p])*prod(p).price,0);
   const money_in = d.cashCounted + d.cardTotal;
-  const variance = money_in - revenue;
   const m = mkt(d.marketId);
   const hrs = hoursWorked(m);
-  return { sold, revenue, money_in, variance, hrs, perHr:(revenue-m.fee)/hrs, commission:revenue*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
+  // What each pack that left the cooler actually brought in. Free fifths,
+  // deals the seller made up and trades with other vendors all land here, and
+  // both inputs get counted anyway - nobody has to declare anything.
+  const yieldPer = sold>0 ? money_in/sold : 0;
+  const fullPer  = sold>0 ? revenue/sold  : 0;
+  return { sold, revenue, money_in, yieldPer, fullPer, given:revenue-money_in,
+           hrs, perHr:(revenue-m.fee)/hrs, commission:revenue*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
 }
 
 function toast(msg){
@@ -1118,9 +1141,8 @@ function scr_today(){
           <div class="mid" style="margin-top:5px">${esc(MY_MARKET.loadIn)}</div>
         </div>
         <div style="text-align:right">
-          <div class="lbl">Market contact</div>
-          <div style="font-size:13px;font-weight:600;margin-top:5px">${esc(MY_MARKET.manager)}</div>
-          <div class="sub">${esc(MY_MARKET.phone)}</div>
+          <div class="lbl">Anything wrong</div>
+          <div style="font-size:13px;font-weight:600;margin-top:5px">Call Nawid</div>
         </div>
       </div>
     </div>
@@ -1475,20 +1497,27 @@ function scr_result(){
   const fromOwn  = expTotal("own");    // fronted by the seller: the shop owes it back
   const drivePay = driverPay();
   const inHand = cash + card;
-  const expected = rev - disc - fromTill;
-  const variance = inHand - expected;
   const commission = rev * COMMISSION;
   const carGas = carAllowance();
   const owed = commission + drivePay + fromOwn + carGas;
   const returning = P_IDS.reduce((a,p)=>a+(S.closing[p]||0),0);
   const samples = P_IDS.reduce((a,p)=>a+(S.samples[p]||0),0);
   const sampleValue = P_IDS.reduce((a,p)=>a+(S.samples[p]||0)*prod(p).price,0);
-  const avgPrice = sold>0 ? (rev-disc)/sold : 0;
   const hrs = hoursWorked(MY_MARKET);
 
-  const vOk = Math.abs(variance) <= 6;
-  const vClass = vOk ? "good" : (Math.abs(variance) <= 20 ? "warn" : "bad");
-  const vLabel = vOk ? "Money matches" : (variance<0 ? `${money2(Math.abs(variance))} short` : `${money2(variance)} over`);
+  /* Money per pack, not a shortfall. Anything spent out of the till was still
+     collected, so it counts as money in. What is left of full price is what got
+     given away to make the sale - free ones, deals the seller made up, trades
+     with another vendor. None of that is provable from a count, and the owner
+     does not chase it, so the app reports the number and passes no verdict.
+     Only a genuinely broken figure - a miscount, a lost envelope - is flagged. */
+  const gross      = inHand + fromTill;
+  const perPack    = sold>0 ? gross/sold : 0;
+  const fullPack   = sold>0 ? rev/sold   : 0;
+  const given      = rev - gross;
+  const broken = sold>0 && (perPack < fullPack*0.55 || gross > rev + 6);
+  const vClass = broken ? "bad" : "good";
+  const vLabel = broken ? "Worth a recount" : "Logged";
 
   return `<div class="pad stack">
     <div>
@@ -1513,23 +1542,30 @@ function scr_result(){
     ${fromOwn ? `<div class="hint">The ${money2(fromOwn)} you fronted is on top of your commission &mdash; that's money back, not pay.</div>` : ""}
 
     <div class="card stripe stripe-${vClass}">
-      <div class="card-hd"><h3>The money check</h3><span class="pill pill-${vClass}">${esc(vLabel)}</span></div>
-      <div class="card-pad" style="padding-top:4px">
-        <div class="kv"><span class="kv-k">${sold} packs at full price</span><span class="kv-v">${money2(rev)}</span></div>
-        ${disc ? `<div class="kv"><span class="kv-k">Deals you gave</span><span class="kv-v">&minus;${money2(disc)}</span></div>` : ""}
-        ${fromTill ? `<div class="kv"><span class="kv-k">Paid out of the till</span><span class="kv-v">&minus;${money2(fromTill)}</span></div>` : ""}
-        <div class="kv"><span class="kv-k"><b>Should have</b></span><span class="kv-v">${money2(expected)}</span></div>
+      <div class="card-hd"><h3>Money per pack</h3><span class="pill pill-${vClass}">${esc(vLabel)}</span></div>
+      <div class="card-pad">
+        <div class="big">${money2(perPack)}</div>
+        <p class="note" style="margin-top:8px">out of ${money2(fullPack)} at full price, across ${sold} packs</p>
+      </div>
+      <div class="card-pad" style="padding-top:0">
         <div class="kv"><span class="kv-k">Cash counted</span><span class="kv-v">${money2(cash)}</span></div>
         <div class="kv"><span class="kv-k">Square</span><span class="kv-v">${money2(card)}</span></div>
-        <div class="kv kv-total"><span class="kv-k">Actually have</span><span class="kv-v">${money2(inHand)}</span></div>
+        ${fromTill ? `<div class="kv"><span class="kv-k">Spent out of the till</span><span class="kv-v">${money2(fromTill)}</span></div>` : ""}
+        <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(gross)}</span></div>
+        <div class="kv"><span class="kv-k">${sold} packs at full price</span><span class="kv-v">${money2(rev)}</span></div>
+        <div class="kv"><span class="kv-k">Given away to make the sale</span><span class="kv-v">${money2(given)}</span></div>
       </div>
     </div>
 
-    ${!vOk ? `<div class="hint"><b>Off by ${money2(Math.abs(variance))}.</b> Deals and anything paid out are already counted above, so this is something else \u2014 usually a recount. Worth a look before you drive off.</div>`:""}
+    ${broken
+      ? `<div class="hint"><b>That does not look right.</b> ${money2(perPack)} a pack is far below what these go for, so it is probably a miscount or money still in a pocket rather than deals. Worth a look before you drive off.</div>`
+      : given > 5
+        ? `<div class="hint"><b>${money2(given)} went out without money.</b> Free ones, deals you made, anything traded${(disc>0 && disc<=given+1)?` \u2014 you noted ${money2(disc)} of it`:""}. Nothing to fix; it just shows what the day cost to sell.</div>`
+        : ""}
 
     <div class="tiles">
       <div class="tile"><div class="lbl">Going back</div><div class="mid">${returning}</div><div class="tile-sub">to the freezer</div></div>
-      <div class="tile"><div class="lbl">Avg per pack</div><div class="mid">${money2(avgPrice)}</div><div class="tile-sub">full price ${money2(sold>0?rev/sold:0)}</div></div>
+      <div class="tile"><div class="lbl">Given away</div><div class="mid">${money2(given)}</div><div class="tile-sub">free ones, deals, trades</div></div>
       <div class="tile"><div class="lbl">Samples</div><div class="mid">${samples}</div><div class="tile-sub">${money2(sampleValue)} given</div></div>
       <div class="tile"><div class="lbl">Sell-through</div><div class="mid">${openedTotal()>0?Math.round(sold/openedTotal()*100):0}%</div><div class="tile-sub">of what you took</div></div>
     </div>
@@ -1584,7 +1620,7 @@ function liveDay(plan){
     else if(S.photo) status="Set up "+(S.arrivedAt||"");
     else if(openedTotal()>0) status="Loaded";
     return { name:"You", phone:null, sold: closed?soldTotal():null, rev: closed?revenueTotal():null,
-             status, live:!closed && !!S.photo, variance:null, out:openedTotal(),
+             status, live:!closed && !!S.photo, perPack:null, fullPer:null, out:openedTotal(),
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: S.corrections.length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
@@ -1594,7 +1630,10 @@ function liveDay(plan){
   const seed = mulberry32(plan.marketId.length*977 + plan.sellerId.length*31 + 7);
   const done = plan.status==="done";
   const sold = done ? Math.round(100*m.size*sellerMult(plan.sellerId,plan.marketId)*(0.95+seed()*0.12)) : null;
-  const rev = done ? sold*12.7 : null;
+  // Money actually in, not list value: whatever this seller gives away -
+  // free ones, their own deals, trades - comes straight off it.
+  const listPer = PRODUCTS.reduce((a,p)=>a+p.price,0)/PRODUCTS.length;
+  const rev = done ? Math.round(sold*listPer*(1-s.giveRate)) : null;
   const sendListQty = recommendMarket(plan.marketId).total;
   // sellers normally take exactly what the send list says; deviations should be rare enough to mean something
   const out = plan.marketId==="ferry" ? sendListQty-24 : sendListQty;
@@ -1603,7 +1642,7 @@ function liveDay(plan){
   const sendList = sendListQty;
   return { name:s.name, phone:s.phone, sold, rev, out,
            status: done ? "Closed" : "Set up "+setupAt,
-           live: !done, variance: done ? (plan.sellerId==="danny"?-31:-2) : null,
+           live: !done, perPack: done ? rev/sold : null, fullPer: listPer,
            overSend: out - sendList, fixes:0,
            owed: done ? sold*12.7*COMMISSION : 0 };
 }
@@ -1627,13 +1666,13 @@ function owner_market(mid){
 
   const rows = days.slice().reverse().map(x=>{
     const k = dayStats(x);
-    const off = Math.abs(k.variance) > 15;
+    const thin = k.fullPer>0 && k.yieldPer < k.fullPer*0.88;
     return `<tr>
       <td><div class="who">${esc(fmtShort(x.dateObj))}</div><div class="sub">${esc(slr(x.sellerId).name)}</div></td>
       <td class="n">${k.sold}</td>
       <td class="n">${money(k.revenue)}</td>
       <td class="n"><span class="sub">${esc(x.weather.t)} ${x.weather.temp}&deg;</span></td>
-      <td class="n">${off?`<span class="pill pill-bad">${money2(Math.abs(k.variance))}</span>`:`<span class="pill pill-good">ok</span>`}</td>
+      <td class="n"><span class="pill ${thin?"pill-warn":"pill-good"}">${money2(k.yieldPer)}</span></td>
     </tr>`;
   }).join("");
 
@@ -1683,8 +1722,6 @@ function owner_market(mid){
         <div class="kv"><span class="kv-k">Stall</span><span class="kv-v">${esc(m.stall)}</span></div>
         <div class="kv"><span class="kv-k">Stall fee</span><span class="kv-v">${money(m.fee)}</span></div>
         <div class="kv"><span class="kv-k">Drive</span><span class="kv-v">${m.driveMin} min each way</span></div>
-        <div class="kv"><span class="kv-k">Market manager</span><span class="kv-v">${esc(m.manager)}</span></div>
-        <div class="kv"><span class="kv-k">Phone</span><span class="kv-v"><a href="tel:${esc(m.phone.replace(/[^0-9+]/g,""))}" style="color:var(--accent);text-decoration:none">${esc(m.phone)}</a></span></div>
         <div class="kv"><span class="kv-k">Van</span><span class="kv-v">${vc.shareNames.length?"shares with "+esc(vc.shareNames.join(", ")):"own trip"}</span></div>
       </div>
     </div>
@@ -1692,7 +1729,7 @@ function owner_market(mid){
     <div class="card">
       <div class="card-hd"><h3>Every day here</h3><span class="pill">${days.length} logged</span></div>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Day</th><th class="n">Packs</th><th class="n">Money</th><th class="n">Weather</th><th class="n">Till</th></tr></thead>
+        <thead><tr><th>Day</th><th class="n">Packs</th><th class="n">Money</th><th class="n">Weather</th><th class="n">$/pack</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
     </div>
@@ -1711,11 +1748,13 @@ function owner_today(){
     const m = mkt(plan.marketId);
     const d = liveDay(plan);
     const closed = d.status==="Closed";
-    const stripe = closed ? (d.variance!==null && Math.abs(d.variance)>20 ? "bad" : "good") : (d.live ? "live" : "");
+    // Low yield is worth a look, never an accusation - it is mostly discount.
+    const thin = closed && d.perPack!==null && d.perPack < d.fullPer*0.88;
+    const stripe = closed ? (thin ? "warn" : "good") : (d.live ? "live" : "");
     const pill = closed
-      ? (d.variance!==null && Math.abs(d.variance)>20
-          ? `<span class="pill pill-bad">${money2(Math.abs(d.variance))} short</span>`
-          : `<span class="pill pill-good">Closed \u00B7 clean</span>`)
+      ? (d.perPack!==null
+          ? `<span class="pill ${thin?"pill-warn":"pill-good"}">${money2(d.perPack)} a pack</span>`
+          : `<span class="pill pill-good">Closed</span>`)
       : d.live
         ? `<span class="pill pill-live"><span class="dot"></span>${esc(d.status)}</span>`
         : `<span class="pill">${esc(d.status)}</span>`;
@@ -1767,16 +1806,22 @@ function owner_today(){
       <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission, driving, money fronted</div></div>
     </div>
     ${(()=>{
-      const worst = SELLERS.map(s=>({s, r:cashRecord(s.id)}))
-        .filter(x=>x.r.bad>0).sort((a,b)=>a.r.avgShort-b.r.avgShort)[0];
-      if(!worst) return "";
-      const others = SELLERS.filter(s=>s.id!==worst.s.id).reduce((a,s)=>a+cashRecord(s.id).bad,0);
+      /* Who is getting the least out of each pack. Says what it costs, and
+         nothing about why - free ones, their own deals and trades all land
+         here, and none of it is provable from a count. */
+      const crew = crewYield();
+      const recs = SELLERS.map(s=>({s, r:yieldRecord(s.id)})).filter(x=>x.r.sold>0);
+      if(recs.length < 2) return "";
+      const low = recs.slice().sort((a,b)=>a.r.per-b.r.per)[0];
+      const behind = crew - low.r.per;
+      if(behind < 0.5) return "";
+      const first = low.s.name.split(" ")[0];
       return `<div class="insight">
         <div class="insight-mark">Heads up</div>
-        <p><b>${esc(worst.s.name)} has come up short on ${worst.r.bad} of ${worst.r.total} closeouts</b>,
-        averaging ${money2(Math.abs(worst.r.avgShort))} missing each time.
-        ${others===0 ? "Nobody else has been short once." : "Everyone else combined has "+others+"."}
-        Worth a conversation.</p>
+        <p><b>${esc(first)}'s packs bring in ${money2(low.r.per)} each.</b>
+        The crew averages ${money2(crew)}. Across the ${low.r.sold} packs ${esc(first)} has sold,
+        that gap is ${money(behind*low.r.sold)} &mdash; free ones, deals and trades all land in it.
+        Worth asking about, not worth accusing anyone over.</p>
       </div>`;
     })()}
     <div class="card">
@@ -1872,27 +1917,26 @@ function owner_send(){
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
-    let vsSum=0, perHrSum=0, varSum=0, n=0, off=0;
+    let vsSum=0, perHrSum=0, n=0;
     days.forEach(d=>{
       const st = dayStats(d);
       const peers = HISTORY.filter(x=>x.marketId===d.marketId);
       const peerAvg = peers.reduce((a,x)=>a+dayStats(x).sold,0)/peers.length;
       vsSum += (st.sold/peerAvg - 1);
       perHrSum += st.revenue/st.hrs;
-      varSum += st.variance; if(Math.abs(st.variance)>15) off++;
       n++;
     });
     const vs = (vsSum/n)*100;
     const perHr = perHrSum/n;
-    const acc = 100 - (off/n)*100;
-    return { s, vs, perHr, acc, n, days };
+    const y = yieldRecord(s.id);
+    return { s, vs, perHr, per:y.per, fullPer:y.fullPer, n, days };
   }).sort((a,b)=>b.vs-a.vs);
 
   const body = rows.map(r=>`<tr>
     <td><div class="who">${esc(r.s.name)}</div><div class="sub">${r.n} market days</div></td>
     <td class="n"><span class="delta ${r.vs>=0?"up":"down"}">${r.vs>=0?"+":""}${r.vs.toFixed(0)}%</span></td>
     <td class="n">${money(r.perHr)}</td>
-    <td class="n">${r.acc>=90?`<span class="pill pill-good">${r.acc.toFixed(0)}%</span>`:`<span class="pill pill-warn">${r.acc.toFixed(0)}%</span>`}</td>
+    <td class="n"><span class="pill ${r.per < r.fullPer*0.88 ? "pill-warn":"pill-good"}">${money2(r.per)}</span></td>
   </tr>`).join("");
 
   return `<div class="pad stack">
@@ -1903,7 +1947,7 @@ function owner_people(){
     <div class="card">
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>Seller</th><th class="n">vs market avg</th><th class="n">$/hour</th><th class="n">Cash accuracy</th></tr></thead>
+          <thead><tr><th>Seller</th><th class="n">vs market avg</th><th class="n">$/hour</th><th class="n">$ per pack</th></tr></thead>
           <tbody>${body}</tbody>
         </table>
       </div>
