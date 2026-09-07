@@ -676,6 +676,21 @@ const PRODUCTS = [
   { id:"pineapple", name:"Spicy Pineapple Salsa", short:"Pineapple", price:8, caseSize:1, kind:"salsa", diet:"vegan" },
   { id:"tomatillo", name:"Tomatillo Salsa",       short:"Tomatillo", price:8, caseSize:1, kind:"salsa", diet:"vegan" }
 ];
+/* Chips are not a counted product and never can be. The shop says "take two
+   bags", one big bag becomes five to seven little ones depending on who is
+   bagging, and whatever comes back is crushed and gets thrown out. So there is
+   no opening count worth having and no closing count at all.
+
+   What there is, is money: $6 a bag, landing in the same till. Left
+   unattributed it would inflate every tamale's money-per-pack - on a good day
+   yield could read higher than full price, which looks broken. So the seller
+   gives one number at close, and chip takings come back out of the yield. */
+const CHIPS = { price:6, bagsPerBig:6 };
+const chipsSold = () => Math.max(0, Number(S.chipsSold)||0);
+const chipMoney = () => chipsSold() * CHIPS.price;
+// Rough guide only - the shop just says take two, more at the busier markets.
+const chipBagsFor = mid => Math.min(7, Math.max(2, Math.round(mkt(mid).size * 3)));
+
 const TAMALE_IDS = PRODUCTS.filter(p=>p.kind==="tamale").map(p=>p.id);
 const SALSA_IDS  = PRODUCTS.filter(p=>p.kind==="salsa").map(p=>p.id);
 const KINDS = [["tamale","Tamales"],["salsa","Salsas"]];
@@ -938,7 +953,7 @@ const BLANK = {
   opening:{}, closing:{},
   samples:P_IDS.reduce((a,p)=>(a[p]=0,a),{}), damaged:P_IDS.reduce((a,p)=>(a[p]=0,a),{}),
   endedAt:null,
-  cashCounted:"", cardTotal:"", otherPays:[], float:150,
+  cashCounted:"", cardTotal:"", otherPays:[], chipsSold:"", float:150,
   soldOut:null, soldOutAt:"", note:"", lead:"",
   showDamaged:false, showLead:false, showSamples:false, showCounts:false,
   submittedAt:null, showFix:false, corrections:[], marketOpen:null,
@@ -1265,6 +1280,13 @@ function scr_loadout(){
     </div>
     ${S.showCounts ? `<div class="card">${rows}</div>` : readOnly}
     <div class="card card-pad spread">
+      <div>
+        <div class="lbl">Chips</div>
+        <div style="font-size:15px;font-weight:600;margin-top:5px">Take ${chipBagsFor(MY_MARKET.id)} big bags</div>
+      </div>
+      <div class="hint" style="max-width:56%">Bag them up at the booth. Nobody counts these &mdash; just say how many you sold at the end.</div>
+    </div>
+    <div class="card card-pad spread">
       <div class="lbl">Going out</div>
       <div class="mid">${total} items</div>
     </div>
@@ -1465,6 +1487,12 @@ function scr_closeout(){
             </div>
             <button class="btn-quiet" data-paydel="${i}" style="flex:0 0 46px;min-height:46px" aria-label="Remove this line">&times;</button>
           </div>`).join("")}
+        <div class="field">
+          <label class="lbl" for="chips">Bags of chips sold${S.chipsSold===""?` &middot; <span class="needed">needed</span>`:""}</label>
+          <input id="chips" type="number" inputmode="numeric" placeholder="0" value="${esc(S.chipsSold)}" data-set="chipsSold">
+          <p class="note" style="margin:0;font-size:12.5px">$${CHIPS.price} each. A count is fine &mdash; leftovers get thrown out anyway, so nothing comes back.</p>
+        </div>
+
         <button class="btn btn-quiet btn-sm" data-act="addpay" style="width:auto">Someone paid another way</button>
         <p class="note" style="margin:0;font-size:12.5px">Venmo, crypto, a cheque &mdash; anything that isn't cash or Square. Only if it happened.</p>
 
@@ -1601,6 +1629,7 @@ function closeoutMissing(){
   if(S.soldOut===null) m.push({ label:"did you sell out", sel:"[data-sold='no']" });
   if(S.cashCounted==="") m.push({ label:"cash counted", sel:"#cash" });
   if(S.cardTotal==="")   m.push({ label:"Square total",  sel:"#card" });
+  if(S.chipsSold==="")   m.push({ label:"chips sold",    sel:"#chips" });
   return m;
 }
 function foot_closeout(){
@@ -1641,10 +1670,14 @@ function scr_result(){
      does not chase it, so the app reports the number and passes no verdict.
      Only a genuinely broken figure - a miscount, a lost envelope - is flagged. */
   const gross      = inHand + fromTill;
-  const perPack    = sold>0 ? gross/sold : 0;
+  /* Chips are not counted stock, so their takings must come out before the
+     packs are divided into the money. Left in, every pack would look like it
+     brought in more than $15 and the number would stop meaning anything. */
+  const packMoney  = gross - chipMoney();
+  const perPack    = sold>0 ? packMoney/sold : 0;
   const fullPack   = sold>0 ? rev/sold   : 0;
-  const given      = rev - gross;
-  const broken = sold>0 && (perPack < fullPack*0.55 || gross > rev + 6);
+  const given      = rev - packMoney;
+  const broken = sold>0 && (perPack < fullPack*0.55 || packMoney > rev + 6);
   const vClass = broken ? "bad" : "good";
   const vLabel = broken ? "Worth a recount" : "Logged";
 
@@ -1682,6 +1715,7 @@ function scr_result(){
         ${(S.otherPays||[]).filter(o=>Number(o.amount)).map(o=>`<div class="kv"><span class="kv-k">${esc(o.how||"Other")}</span><span class="kv-v">${money2(Number(o.amount)||0)}</span></div>`).join("")}
         ${fromTill ? `<div class="kv"><span class="kv-k">Spent out of the till</span><span class="kv-v">${money2(fromTill)}</span></div>` : ""}
         <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(gross)}</span></div>
+        ${chipsSold() ? `<div class="kv"><span class="kv-k">Less ${chipsSold()} bags of chips</span><span class="kv-v">&minus;${money2(chipMoney())}</span></div>` : ""}
         <div class="kv"><span class="kv-k">${sold} packs at full price</span><span class="kv-v">${money2(rev)}</span></div>
         <div class="kv"><span class="kv-k">Given away to make the sale</span><span class="kv-v">${money2(given)}</span></div>
       </div>
@@ -2407,7 +2441,7 @@ document.addEventListener("change", e => {
     render();
   } else {
     S[key] = el.value;
-    if(key==="cashCounted"||key==="cardTotal") render();
+    if(key==="cashCounted"||key==="cardTotal"||key==="chipsSold") render();
   }
 });
 
