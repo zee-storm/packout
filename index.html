@@ -670,11 +670,11 @@ const PRODUCTS = [
   /* Salsas ride along in the same list so they get counted, priced and paid
      out exactly like everything else. The kind is what keeps them out of the
      tamale-only language and out of the batch-age logic. */
-  { id:"classic",   name:"Classic Salsa",         short:"Classic",   price:8, caseSize:1, kind:"salsa" },
-  { id:"chipotle",  name:"Chipotle Salsa",        short:"Chipotle",  price:8, caseSize:1, kind:"salsa" },
-  { id:"mango",     name:"Mango Salsa",           short:"Mango",     price:8, caseSize:1, kind:"salsa" },
-  { id:"pineapple", name:"Spicy Pineapple Salsa", short:"Pineapple", price:8, caseSize:1, kind:"salsa" },
-  { id:"tomatillo", name:"Tomatillo Salsa",       short:"Tomatillo", price:8, caseSize:1, kind:"salsa" }
+  { id:"classic",   name:"Classic Salsa",         short:"Classic",   price:8, caseSize:1, kind:"salsa", diet:"vegan" },
+  { id:"chipotle",  name:"Chipotle Salsa",        short:"Chipotle",  price:8, caseSize:1, kind:"salsa", diet:"vegan" },
+  { id:"mango",     name:"Mango Salsa",           short:"Mango",     price:8, caseSize:1, kind:"salsa", diet:"vegan" },
+  { id:"pineapple", name:"Spicy Pineapple Salsa", short:"Pineapple", price:8, caseSize:1, kind:"salsa", diet:"vegan" },
+  { id:"tomatillo", name:"Tomatillo Salsa",       short:"Tomatillo", price:8, caseSize:1, kind:"salsa", diet:"vegan" }
 ];
 const TAMALE_IDS = PRODUCTS.filter(p=>p.kind==="tamale").map(p=>p.id);
 const SALSA_IDS  = PRODUCTS.filter(p=>p.kind==="salsa").map(p=>p.id);
