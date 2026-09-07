@@ -657,14 +657,14 @@ th.n{text-align:right}
 const PRODUCTS = [
   { id:"chilicorn",  name:"Cheese Chili Corn",   short:"Chili corn",  price:15, caseSize:1 },
   { id:"cheddar",    name:"Smoked Cheddar",      short:"Cheddar",     price:15, caseSize:1 },
-  { id:"beancheese", name:"Bean and Cheese",     short:"Bean &amp; cheese", price:15, caseSize:1 },
+  { id:"beancheese", name:"Bean and Cheese",     short:"Bean & cheese", price:15, caseSize:1 },
   { id:"goat",       name:"Goat Cheese",         short:"Goat cheese", price:15, caseSize:1 },
   { id:"veggie",     name:"Summer Veggie",       short:"Summer veggie", price:15, caseSize:1 },
   { id:"cauli",      name:"Spicy Cauliflower",   short:"Cauliflower", price:15, caseSize:1 },
   { id:"chicken",    name:"Chicken",             short:"Chicken",     price:15, caseSize:1 },
   { id:"beef",       name:"Beef and Cheese",     short:"Beef",        price:15, caseSize:1 },
   { id:"pumpkin",    name:"Pumpkin",             short:"Pumpkin",     price:15, caseSize:1 },
-  { id:"beans",      name:"Red and Black Beans", short:"Red &amp; black", price:15, caseSize:1 },
+  { id:"beans",      name:"Red and Black Beans", short:"Red & black", price:15, caseSize:1 },
   { id:"breakfast",  name:"Breakfast",           short:"Breakfast",   price:15, caseSize:1 }
 ];
 const TAMALES_PER_PACK = 2;
@@ -924,7 +924,7 @@ const BLANK = {
   endedAt:null,
   cashCounted:"", cardTotal:"", float:150,
   soldOut:null, soldOutAt:"", note:"", lead:"",
-  showDamaged:false, showLead:false,
+  showDamaged:false, showLead:false, showSamples:false, showCounts:false,
   submittedAt:null, showFix:false, corrections:[], marketOpen:null,
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
@@ -1021,7 +1021,8 @@ function carAllowance(){
   const t = S.travel || {};
   return (t.mode==="own" && t.gasMode==="flat") ? (Number(t.gasAmount)||0) : 0;
 }
-function countedAll(){ return P_IDS.every(p => S.closing[p] !== undefined && S.closing[p] !== null); }
+const WENT_OUT = () => P_IDS.filter(p => (S.opening[p]||0) > 0);
+function countedAll(){ return WENT_OUT().every(p => S.closing[p] !== undefined && S.closing[p] !== null); }
 
 function hoursWorked(m){ return m.sellHrs + 1 + 0.75 + 0.75 + (m.driveMin*2)/60; }
 
@@ -1194,6 +1195,16 @@ function foot_today(){
 }
 
 function scr_loadout(){
+  /* They take what the paper says nearly every time, so the default is to
+     confirm it. The counters were already pre-filled with these same numbers,
+     so a seller could tap straight past without touching one - this is the
+     same count, just without eleven rows of scrolling to get to the button. */
+  const plan = PRODUCTS.map(p=>({ p, qty: S.opening[p.id] ?? MY_REC.byProduct[p.id].qty }));
+  const readOnly = plan.map(({p,qty})=>`<div class="step-row">
+      <div class="grow"><div class="step-name">${esc(p.short)}</div></div>
+      <div class="mid">${qty}</div>
+    </div>`).join("");
+
   const rows = PRODUCTS.map(p=>{
     const v = S.opening[p.id] ?? MY_REC.byProduct[p.id].qty;
     return `<div class="step-row">
@@ -1214,13 +1225,16 @@ function scr_loadout(){
     <div>
       <div class="lbl">Step 1 of 3</div>
       <h1 class="page" style="margin-top:6px">Count into the cooler</h1>
-      <p class="note" style="margin-top:5px">Change anything that doesn't match what you actually loaded.</p>
+      <p class="note" style="margin-top:5px">${S.showCounts ? "Put in what's actually in the cooler." : "Check the cooler against this. Tap below if anything doesn't match."}</p>
     </div>
-    <div class="card">${rows}</div>
+    <div class="card">${S.showCounts ? rows : readOnly}</div>
     <div class="card card-pad spread">
       <div class="lbl">Going out</div>
       <div class="mid">${total} packs</div>
     </div>
+    <button class="btn btn-quiet" data-act="toggle" data-flag="showCounts">
+      ${S.showCounts ? "Done changing" : "Something's different"}
+    </button>
     ${total !== MY_REC.total
       ? `<div class="card card-pad stripe stripe-warn stack-sm">
            <div class="spread"><div class="lbl">Different from the send list</div>
@@ -1243,7 +1257,7 @@ function scr_loadout(){
       </div>` : ""}
     </div>
 
-    <div class="hint">This count is what everything else is measured against. Put in what's <b>actually</b> in the cooler, even if it isn't the suggested number.</div>
+    <div class="hint">This count is what everything else is measured against. If the cooler doesn't match, change it &mdash; nobody minds, and it keeps the numbers straight at the end.</div>
   </div>`;
 }
 function foot_loadout(){
@@ -1309,13 +1323,17 @@ function foot_market(){
 
 
 function scr_closeout(){
-  const rows = PRODUCTS.map(p=>{
+  /* A flavour that never left the shop has nothing to come back. Any one of
+     the eleven might simply not get made that day, so only ask about what is
+     actually in the cooler. */
+  const TOOK = PRODUCTS.filter(p => (S.opening[p.id]||0) > 0);
+  const rows = TOOK.map(p=>{
     const v = S.closing[p.id];
     const shown = (v===undefined || v===null) ? "" : v;
     return `<div class="step-row">
       <div class="grow">
         <div class="step-name">${esc(p.short)}</div>
-        <div class="step-sub">took ${S.opening[p.id]||0} out${shown===""?` &middot; <span class="needed">not counted</span>`:""}</div>
+        <div class="step-sub">took ${S.opening[p.id]||0} out</div>
       </div>
       <div class="stepper">
         <button data-adj="closing" data-p="${p.id}" data-d="-1" aria-label="Less ${esc(p.short)}">&ndash;</button>
@@ -1325,7 +1343,7 @@ function scr_closeout(){
     </div>`;
   }).join("");
 
-  const sampleRows = PRODUCTS.map(p=>`<div class="step-row">
+  const sampleRows = TOOK.map(p=>`<div class="step-row">
       <div class="grow"><div class="step-name">${esc(p.short)}</div></div>
       <div class="stepper">
         <button data-adj="samples" data-p="${p.id}" data-d="-1" aria-label="Fewer ${esc(p.short)} samples">&ndash;</button>
@@ -1334,7 +1352,7 @@ function scr_closeout(){
       </div>
     </div>`).join("");
 
-  const damagedRows = PRODUCTS.map(p=>`<div class="step-row">
+  const damagedRows = TOOK.map(p=>`<div class="step-row">
       <div class="grow"><div class="step-name">${esc(p.short)}</div></div>
       <div class="stepper">
         <button data-adj="damaged" data-p="${p.id}" data-d="-1" aria-label="Fewer ${esc(p.short)} damaged">&ndash;</button>
@@ -1355,9 +1373,15 @@ function scr_closeout(){
 
     <div class="card">
       <div class="card-hd"><h3>Samples given out</h3><span class="pill">comes out of the cooler</span></div>
-      ${sampleRows}
+      <div class="card-pad stack-sm">
+        <div class="seg">
+          <button data-samp="no"  aria-pressed="${!S.showSamples}">None today</button>
+          <button data-samp="yes" aria-pressed="${S.showSamples}">Gave some out</button>
+        </div>
+      </div>
+      ${S.showSamples ? sampleRows : ""}
     </div>
-    <div class="hint">Samples leave the cooler but bring in no money. Counting them here is what keeps you from looking short.</div>
+    ${S.showSamples ? `<div class="hint">Samples leave the cooler but bring in no money. Counting them here is what keeps you from looking short.</div>` : ""}
 
     <div class="card card-pad stack-sm">
       <div class="spread"><div class="lbl">Did you sell out?</div>
@@ -1505,7 +1529,7 @@ function scr_closeout(){
 }
 function closeoutMissing(){
   const m = [];
-  P_IDS.forEach(p=>{
+  WENT_OUT().forEach(p=>{
     const v = S.closing[p];
     if(v===undefined || v===null || v==="")
       m.push({ label:prod(p).short+" count", sel:"[data-set='closing'][data-p='"+p+"']" });
@@ -2183,6 +2207,13 @@ document.addEventListener("click", e => {
     const p = t.dataset.p, d = Number(t.dataset.d);
     const cur = S[adj][p] ?? (adj==="opening" ? MY_REC.byProduct[p].qty : 0);
     S[adj][p] = Math.max(0, cur + d);
+    render(); return;
+  }
+
+  const samp = t.dataset.samp;
+  if(samp){
+    S.showSamples = samp==="yes";
+    if(!S.showSamples) P_IDS.forEach(p=>{ S.samples[p]=0; });
     render(); return;
   }
 
