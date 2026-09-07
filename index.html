@@ -655,19 +655,35 @@ th.n{text-align:right}
    send list up to a case nobody packs in just inflates every number. If they
    turn out to pack in dozens, this is the one line to change. */
 const PRODUCTS = [
-  { id:"chilicorn",  name:"Cheese Chili Corn",   short:"Chili corn",  price:15, caseSize:1 },
-  { id:"cheddar",    name:"Smoked Cheddar",      short:"Cheddar",     price:15, caseSize:1 },
-  { id:"beancheese", name:"Bean and Cheese",     short:"Bean & cheese", price:15, caseSize:1 },
-  { id:"goat",       name:"Goat Cheese",         short:"Goat cheese", price:15, caseSize:1 },
-  { id:"veggie",     name:"Summer Veggie",       short:"Summer veggie", price:15, caseSize:1 },
-  { id:"cauli",      name:"Spicy Cauliflower",   short:"Cauliflower", price:15, caseSize:1 },
-  { id:"chicken",    name:"Chicken",             short:"Chicken",     price:15, caseSize:1 },
-  { id:"beef",       name:"Beef and Cheese",     short:"Beef",        price:15, caseSize:1 },
-  { id:"pumpkin",    name:"Pumpkin",             short:"Pumpkin",     price:15, caseSize:1 },
-  { id:"beans",      name:"Red and Black Beans", short:"Red & black", price:15, caseSize:1 },
-  { id:"breakfast",  name:"Breakfast",           short:"Breakfast",   price:15, caseSize:1 }
+  { id:"chilicorn",  name:"Cheese Chili Corn",   short:"Chili corn",  price:15, caseSize:1, kind:"tamale", diet:"veg" },
+  { id:"cheddar",    name:"Smoked Cheddar",      short:"Cheddar",     price:15, caseSize:1, kind:"tamale", diet:"veg" },
+  { id:"beancheese", name:"Bean and Cheese",     short:"Bean & cheese", price:15, caseSize:1, kind:"tamale", diet:"veg" },
+  { id:"goat",       name:"Goat Cheese",         short:"Goat cheese", price:15, caseSize:1, kind:"tamale", diet:"veg" },
+  { id:"veggie",     name:"Summer Veggie",       short:"Summer veggie", price:15, caseSize:1, kind:"tamale", diet:"vegan" },
+  { id:"cauli",      name:"Spicy Cauliflower",   short:"Cauliflower", price:15, caseSize:1, kind:"tamale", diet:"vegan" },
+  { id:"chicken",    name:"Chicken",             short:"Chicken",     price:15, caseSize:1, kind:"tamale", diet:"chicken" },
+  { id:"beef",       name:"Beef and Cheese",     short:"Beef",        price:15, caseSize:1, kind:"tamale", diet:"beef" },
+  { id:"pumpkin",    name:"Pumpkin",             short:"Pumpkin",     price:15, caseSize:1, kind:"tamale", diet:"vegan" },
+  { id:"beans",      name:"Red and Black Beans", short:"Red & black", price:15, caseSize:1, kind:"tamale", diet:"vegan" },
+  { id:"breakfast",  name:"Breakfast",           short:"Breakfast",   price:15, caseSize:1, kind:"tamale", diet:"veg" },
+
+  /* Salsas ride along in the same list so they get counted, priced and paid
+     out exactly like everything else. The kind is what keeps them out of the
+     tamale-only language and out of the batch-age logic. */
+  { id:"classic",   name:"Classic Salsa",         short:"Classic",   price:8, caseSize:1, kind:"salsa" },
+  { id:"chipotle",  name:"Chipotle Salsa",        short:"Chipotle",  price:8, caseSize:1, kind:"salsa" },
+  { id:"mango",     name:"Mango Salsa",           short:"Mango",     price:8, caseSize:1, kind:"salsa" },
+  { id:"pineapple", name:"Spicy Pineapple Salsa", short:"Pineapple", price:8, caseSize:1, kind:"salsa" },
+  { id:"tomatillo", name:"Tomatillo Salsa",       short:"Tomatillo", price:8, caseSize:1, kind:"salsa" }
 ];
+const TAMALE_IDS = PRODUCTS.filter(p=>p.kind==="tamale").map(p=>p.id);
+const SALSA_IDS  = PRODUCTS.filter(p=>p.kind==="salsa").map(p=>p.id);
+const KINDS = [["tamale","Tamales"],["salsa","Salsas"]];
 const TAMALES_PER_PACK = 2;
+/* Every tamale is lard free and gluten free - a blanket fact, so it is said
+   once rather than tagged on all eleven. Only the vegan/vegetarian split
+   varies, and customers ask about it constantly. */
+const DIET_TAG = { vegan:"Vegan", veg:"Vegetarian" };
 const PACKS_PER_COOLER = 50;   // rough, from the shop
 const P_IDS = PRODUCTS.map(p=>p.id);
 const prod = id => PRODUCTS.find(p=>p.id===id);
@@ -898,7 +914,7 @@ const BATCH_AGE = (()=>{
   return out;
 })();
 // The batch that has been out the most times: the one to move today.
-const OLDEST = P_IDS.slice().sort((a,b) => BATCH_AGE[b].trips - BATCH_AGE[a].trips)[0];
+const OLDEST = TAMALE_IDS.slice().sort((a,b) => BATCH_AGE[b].trips - BATCH_AGE[a].trips)[0];
 
 /* =========================================================
    Live state (the seller's own day) \u2014 persisted
@@ -1199,11 +1215,22 @@ function scr_loadout(){
      confirm it. The counters were already pre-filled with these same numbers,
      so a seller could tap straight past without touching one - this is the
      same count, just without eleven rows of scrolling to get to the button. */
-  const plan = PRODUCTS.map(p=>({ p, qty: S.opening[p.id] ?? MY_REC.byProduct[p.id].qty }));
-  const readOnly = plan.map(({p,qty})=>`<div class="step-row">
-      <div class="grow"><div class="step-name">${esc(p.short)}</div></div>
-      <div class="mid">${qty}</div>
-    </div>`).join("");
+  const qtyOf = p => S.opening[p.id] ?? MY_REC.byProduct[p.id].qty;
+  // One card per kind, so a salsa count never reads as a tamale count.
+  const readOnly = KINDS.map(([k,label])=>{
+    const list = PRODUCTS.filter(p=>p.kind===k);
+    if(!list.length) return "";
+    return `<div class="card">
+      <div class="card-hd"><h3>${label}</h3><span class="pill">${list.reduce((a,p)=>a+qtyOf(p),0)}</span></div>
+      ${list.map(p=>`<div class="step-row">
+        <div class="grow">
+          <div class="step-name">${esc(p.short)}</div>
+          ${DIET_TAG[p.diet] ? `<div style="margin-top:5px"><span class="chip ${p.diet==="vegan"?"chip-hi":""}">${DIET_TAG[p.diet]}</span></div>` : ""}
+        </div>
+        <div class="mid">${qtyOf(p)}</div>
+      </div>`).join("")}
+    </div>`;
+  }).join("");
 
   const rows = PRODUCTS.map(p=>{
     const v = S.opening[p.id] ?? MY_REC.byProduct[p.id].qty;
@@ -1227,10 +1254,10 @@ function scr_loadout(){
       <h1 class="page" style="margin-top:6px">Count into the cooler</h1>
       <p class="note" style="margin-top:5px">${S.showCounts ? "Put in what's actually in the cooler." : "Check the cooler against this. Tap below if anything doesn't match."}</p>
     </div>
-    <div class="card">${S.showCounts ? rows : readOnly}</div>
+    ${S.showCounts ? `<div class="card">${rows}</div>` : readOnly}
     <div class="card card-pad spread">
       <div class="lbl">Going out</div>
-      <div class="mid">${total} packs</div>
+      <div class="mid">${total} items</div>
     </div>
     <button class="btn btn-quiet" data-act="toggle" data-flag="showCounts">
       ${S.showCounts ? "Done changing" : "Something's different"}
@@ -1257,7 +1284,7 @@ function scr_loadout(){
       </div>` : ""}
     </div>
 
-    <div class="hint">This count is what everything else is measured against. If the cooler doesn't match, change it &mdash; nobody minds, and it keeps the numbers straight at the end.</div>
+    <div class="hint">Everything is <b>lard free and gluten free</b> &mdash; you'll get asked. This count is what everything else is measured against. If the cooler doesn't match, change it &mdash; nobody minds, and it keeps the numbers straight at the end.</div>
   </div>`;
 }
 function foot_loadout(){
@@ -1327,7 +1354,7 @@ function scr_closeout(){
      the eleven might simply not get made that day, so only ask about what is
      actually in the cooler. */
   const TOOK = PRODUCTS.filter(p => (S.opening[p.id]||0) > 0);
-  const rows = TOOK.map(p=>{
+  const countRow = p => {
     const v = S.closing[p.id];
     const shown = (v===undefined || v===null) ? "" : v;
     return `<div class="step-row">
@@ -1340,6 +1367,15 @@ function scr_closeout(){
         <input class="num" type="number" inputmode="numeric" placeholder="?" data-set="closing" data-p="${p.id}" value="${shown}">
         <button data-adj="closing" data-p="${p.id}" data-d="1" aria-label="More ${esc(p.short)}">+</button>
       </div>
+    </div>`;
+  };
+  // One card per kind, so a salsa count never reads as a tamale count.
+  const rows = KINDS.map(([k,label])=>{
+    const list = TOOK.filter(p=>p.kind===k);
+    if(!list.length) return "";
+    return `<div class="card">
+      <div class="card-hd"><h3>${label}</h3><span class="pill">${list.length} to count</span></div>
+      ${list.map(countRow).join("")}
     </div>`;
   }).join("");
 
@@ -1369,7 +1405,7 @@ function scr_closeout(){
       <h1 class="page" style="margin-top:6px">Count what's left</h1>
       <p class="note" style="margin-top:5px">Count the cooler before you drive off, not after.</p>
     </div>
-    <div class="card">${rows}</div>
+    ${rows}
 
     <div class="card">
       <div class="card-hd"><h3>Samples given out</h3><span class="pill">comes out of the cooler</span></div>
