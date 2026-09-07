@@ -7,7 +7,7 @@
    Bump CACHE whenever the app file changes, or phones will keep serving the
    old one. */
 
-const CACHE = "packout-20e29434";
+const CACHE = "packout-b15dacca";
 
 const SHELL = [
   "./",

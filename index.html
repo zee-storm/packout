@@ -704,7 +704,7 @@ const P_IDS = PRODUCTS.map(p=>p.id);
 const prod = id => PRODUCTS.find(p=>p.id===id);
 
 const COMMISSION = 0.20;      // 20% of the day's total - what the sellers say they actually take
-const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
+const DRIVER_LEG_PAY = 0;     // no separate pay for driving - see driverPay()
 const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
 
 /* One van, two markets. The person going furthest drives and drops the other
@@ -1050,10 +1050,12 @@ function packedByName(){
   return x ? x.name : "You";
 }
 function packedBySomeoneElse(){ return !!S.packedBy && S.packedBy!=="you"; }
-function driverPay(){
-  const t = S.travel || {};
-  return t.mode==="van" ? (t.legs||0) * DRIVER_LEG_PAY : 0;
-}
+/* Kept at zero on purpose. There was a $10-a-leg payment here for dropping
+   another seller off and collecting them, but nobody could confirm every
+   seller actually gets it - the owner said no extra pay for driving, and the
+   shop already has its own way of settling this. An app that pays it anyway
+   would be introducing a rule rather than recording one. */
+function driverPay(){ return 0; }
 // A flat gas allowance for taking your own car. If instead they filled the tank
 // themselves, that is a receipt line under "money you spent" - never both, or
 // the same gas gets paid twice.
@@ -1549,7 +1551,7 @@ function scr_closeout(){
     </div>
 
     <div class="card">
-      <div class="card-hd"><h3>Getting there</h3><span class="pill">${money(DRIVER_LEG_PAY)} a leg for driving</span></div>
+      <div class="card-hd"><h3>Getting there</h3><span class="pill">how you travelled</span></div>
       <div class="card-pad stack-sm">
         <div class="seg">
           <button data-travel="van"  aria-pressed="${S.travel.mode==="van"}">Company van</button>
@@ -1579,7 +1581,7 @@ function scr_closeout(){
                 ${MARKETS.map(x=>`<option value="${x.id}" ${S.travel.marketId===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
               </select>
             </div>
-            <div class="spread" style="margin-top:4px"><div class="lbl">Driving pay</div><div class="mid">${money(driverPay())}</div></div>` : ""}` : ""}
+` : ""}` : ""}
 
         ${S.travel.mode==="own" ? `
           <div class="lbl" style="margin-top:10px">How is the gas being covered?</div>
@@ -1694,7 +1696,7 @@ function scr_result(){
         <p class="note" style="margin-top:8px">${money2(owed/hrs)}/hr across the whole ${hrs.toFixed(1)}-hour day, door to door</p>
       </div>
       <div class="card-pad" style="padding-top:0">
-        <div class="kv"><span class="kv-k">Commission &mdash; ${sold} packs at 15%</span><span class="kv-v">${money2(commission)}</span></div>
+        <div class="kv"><span class="kv-k">Commission &mdash; ${sold} packs at ${Math.round(COMMISSION*100)}%</span><span class="kv-v">${money2(commission)}</span></div>
         ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?" both ways":" one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
         ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
         ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
@@ -1954,8 +1956,7 @@ function owner_today(){
   const totRev    = closedOnes.reduce((a,d)=>a+d.rev,0);
   const fees      = TODAY_PLAN.reduce((a,p)=>a+mkt(p.marketId).fee,0);
   const nClosed   = closedOnes.length, nAll = TODAY_PLAN.length;
-  const dayDriverPay = VAN_RUNS.length * DRIVER_LEG_PAY * 2;   // one drop-off run, both ways
-  const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0) + dayDriverPay;
+  const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0);
 
   return `<div class="pad stack">
     <div>
@@ -1966,8 +1967,8 @@ function owner_today(){
     <div class="tiles">
       <div class="tile"><div class="lbl">Packs sold</div><div class="mid">${totSold}</div><div class="tile-sub">${nClosed} of ${nAll} closed</div></div>
       <div class="tile"><div class="lbl">Money in</div><div class="mid">${money(totRev)}</div><div class="tile-sub">cash + card</div></div>
-      <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">${money(dayDriverPay)} driving on top</div></div>
-      <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission, driving, money fronted</div></div>
+      <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">what the markets charge</div></div>
+      <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission and money fronted</div></div>
     </div>
     ${(()=>{
       /* Who is getting the least out of each pack. Says what it costs, and
@@ -2131,7 +2132,7 @@ function owner_people(){
       </div>`;
     })()}
     <div class="card">
-      <div class="card-hd"><h3>This week's pay</h3><span class="pill">15% of sales</span></div>
+      <div class="card-hd"><h3>This week's pay</h3><span class="pill">${Math.round(COMMISSION*100)}% of sales</span></div>
       <div class="card-pad">
         ${SELLERS.map(s=>{
           const wk = HISTORY.filter(d=>d.sellerId===s.id).slice(-2);
