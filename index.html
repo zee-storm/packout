@@ -902,8 +902,8 @@ function recommend(marketId, productId){
   const wx = fc ? wxMult(fc.t) : 1;
 
   const cs = prod(productId).caseSize;
-  const qty = Math.max(cs, Math.ceil(avg*buffer*wx/cs)*cs);
-  const plain = Math.max(cs, Math.ceil(avg*buffer/cs)*cs);
+  const qty = Math.ceil(avg*buffer*wx/cs)*cs;
+  const plain = Math.ceil(avg*buffer/cs)*cs;
   return { qty, sold, avg, anySoldOut, buffer, fc, wx, plain };
 }
 function recommendMarket(marketId){
@@ -1683,9 +1683,11 @@ function scr_result(){
   const perPack    = sold>0 ? packMoney/sold : 0;
   const fullPack   = sold>0 ? rev/sold   : 0;
   const given      = rev - packMoney;
-  const broken = sold>0 && (perPack < fullPack*0.55 || packMoney > rev + 6);
-  const vClass = broken ? "bad" : "good";
-  const vLabel = broken ? "Worth a recount" : "Logged";
+  const tooLow  = sold>0 && perPack < fullPack*0.55;
+  const tooHigh = sold>0 && packMoney > rev + 6;
+  const broken  = tooLow || tooHigh;
+  const vClass  = broken ? "bad" : "good";
+  const vLabel  = broken ? "Worth a recount" : "Logged";
 
   return `<div class="pad stack">
     <div>
@@ -1723,11 +1725,13 @@ function scr_result(){
         <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(gross)}</span></div>
         ${chipsSold() ? `<div class="kv"><span class="kv-k">Less ${chipsSold()} bags of chips</span><span class="kv-v">&minus;${money2(chipMoney())}</span></div>` : ""}
         <div class="kv"><span class="kv-k">${sold} packs at full price</span><span class="kv-v">${money2(rev)}</span></div>
-        <div class="kv"><span class="kv-k">Given away to make the sale</span><span class="kv-v">${money2(given)}</span></div>
+        <div class="kv"><span class="kv-k">${given < 0 ? "More money than the count explains" : "Given away to make the sale"}</span><span class="kv-v">${money2(Math.abs(given))}</span></div>
       </div>
     </div>
 
-    ${broken
+    ${tooHigh
+      ? `<div class="hint"><b>There is more money here than the count explains.</b> ${money2(Math.abs(given))} more, which usually means a flavour got counted wrong or more chips went out than were logged. Worth a look before you drive off.</div>`
+      : tooLow
       ? `<div class="hint"><b>That does not look right.</b> ${money2(perPack)} a pack is far below what these go for, so it is probably a miscount or money still in a pocket rather than deals. Worth a look before you drive off.</div>`
       : given > 5
         ? `<div class="hint"><b>${money2(given)} went out without money.</b> Free ones, deals you made, anything traded${(disc>0 && disc<=given+1)?` \u2014 you noted ${money2(disc)} of it`:""}. Nothing to fix; it just shows what the day cost to sell.</div>`
@@ -1735,7 +1739,7 @@ function scr_result(){
 
     <div class="tiles">
       <div class="tile"><div class="lbl">Going back</div><div class="mid">${returning}</div><div class="tile-sub">to the freezer</div></div>
-      <div class="tile"><div class="lbl">Given away</div><div class="mid">${money2(given)}</div><div class="tile-sub">free ones, deals, trades</div></div>
+      <div class="tile"><div class="lbl">${given < 0 ? "Unexplained" : "Given away"}</div><div class="mid">${money2(Math.abs(given))}</div><div class="tile-sub">${given < 0 ? "more than the count explains" : "free ones, deals, trades"}</div></div>
       <div class="tile"><div class="lbl">Samples</div><div class="mid">${samples}</div><div class="tile-sub">${money2(sampleValue)} given</div></div>
       <div class="tile"><div class="lbl">Sell-through</div><div class="mid">${openedTotal()>0?Math.round(sold/openedTotal()*100):0}%</div><div class="tile-sub">of what you took</div></div>
     </div>
