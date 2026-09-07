@@ -749,6 +749,7 @@ function vanCostFor(mid){
 
 const SHOP = {
   sellHrs: 4,          // he says 99% of them are four hours - this one is real
+  eveningHours: "4:00 - 8:00",   // seasonal, and only on the markets marked evening
   fee: null,           // $45-$95 depending on the market, nobody has said which
   driveMin: 45,        // "avg 45, sometimes more or less"
   feeLow: 45, feeHigh: 95
@@ -786,7 +787,7 @@ const MARKETS = [
   { id:"walnutcreekkaiser-wed", name:"Walnut Creek Kaiser", day:"Wed", crew:["habid"], vehicle:null },
   { id:"paloalto-wed", name:"Palo Alto", day:"Wed", crew:[], vehicle:null },
   { id:"santarosa-wed", name:"Santa Rosa", day:"Wed", crew:[], vehicle:null },
-  { id:"sanleandro-wed", name:"San Leandro", day:"Wed", crew:[], vehicle:null },
+  { id:"sanleandro-wed", name:"San Leandro", day:"Wed", crew:["bahir"], vehicle:null, evening:true },
   { id:"sanrafael-thu", name:"San Rafael", day:"Thu", crew:[], vehicle:null },
   { id:"richmondkaiser-thu", name:"Richmond Kaiser", day:"Thu", crew:[], vehicle:null },
   { id:"losaltos-thu", name:"Los Altos", day:"Thu", crew:[], vehicle:null },
@@ -990,6 +991,23 @@ for(let w=8; w>=1; w--){
    Today
    ========================================================= */
 
+/* Which seller is holding this phone. Picked once and remembered, so the app
+   can open on THEIR market instead of whichever one happens to be first that
+   day. No server and no password - it stands in for the 6-digit code from the
+   backend plan until there is something to enrol against. */
+function me(){ return S.me ? slr(S.me) : null; }
+function myMarketToday(){
+  const today = MARKETS.filter(m => m.day === DAYS[TODAY.getDay()]);
+  if(S.me){
+    const mine = today.filter(m => m.crew.includes(S.me));
+    return mine[0] || null;          // null means nothing on for them today
+  }
+  return today[0] || MARKETS[0];
+}
+// Every screen below assumes a market, so keep one to draw with even when the
+// day is empty - the empty state is what actually gets shown.
+function marketOrAny(){ return myMarketToday() || MARKETS[0]; }
+
 /* Today is whichever markets run on today's weekday - fourteen of them on a
    Sunday. A slot with nobody named is shown as unassigned rather than hidden:
    the owner needs to see the gap. */
@@ -1074,7 +1092,7 @@ const BLANK = {
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
   travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
-  packedBy:"you", showPacker:false
+  packedBy:"you", showPacker:false, me:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
 loadNote();
@@ -1127,8 +1145,8 @@ function load(){
 }
 function reset(){ S = JSON.parse(JSON.stringify(BLANK)); save(); render(); }
 
-const MY_MARKET = TODAY_MARKETS[0] || MARKETS[0];
-const MY_REC = recommendMarket(MY_MARKET.id);
+let MY_MARKET = marketOrAny();
+let MY_REC = recommendMarket(MY_MARKET.id);
 
 /* =========================================================
    Helpers
@@ -1291,6 +1309,40 @@ async function keepAwake(on){
    SELLER SCREENS
    ========================================================= */
 
+function scr_whoami(){
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">Before you start</div>
+      <h1 class="page" style="margin-top:6px">Who's got this phone?</h1>
+      <p class="note" style="margin-top:5px">Tap your name. It only asks once &mdash; after this it opens straight to your market.</p>
+    </div>
+    <div class="card">
+      ${SELLERS.map(s=>`<button class="step-row" data-me="${s.id}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--glass-line-2);cursor:pointer;text-align:left">
+        <div class="grow"><div class="step-name">${esc(s.name)}</div></div>
+        <div class="mid" style="font-size:18px;color:var(--muted)">&rsaquo;</div>
+      </button>`).join("")}
+    </div>
+    <div class="hint">Wrong name? Tap the market name on the next screen to change it.</div>
+  </div>`;
+}
+
+function scr_dayoff(){
+  const next = MARKETS.filter(m => m.crew.includes(S.me))
+    .map(m => DAY_FULL[m.day] + " at " + m.name);
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">${esc(fmtDate(TODAY))}</div>
+      <h1 class="page" style="margin-top:6px">Nothing on today</h1>
+      <p class="note" style="margin-top:5px">No market for ${esc(me()?me().name:"you")} today.</p>
+    </div>
+    ${next.length ? `<div class="card">
+      <div class="card-hd"><h3>Your markets</h3></div>
+      ${next.map(x=>`<div class="step-row"><div class="grow"><div class="step-name">${esc(x)}</div></div></div>`).join("")}
+    </div>` : `<div class="hint">Nobody has you down for a market yet. Check with Nawid.</div>`}
+    <button class="btn btn-quiet" data-act="switch-me">Not ${esc(me()?me().name:"you")}?</button>
+  </div>`;
+}
+
 function scr_today(){
   const r = MY_REC;
   const rows = PRODUCTS.map(p=>{
@@ -1308,7 +1360,8 @@ function scr_today(){
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
-      <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; about ${SHOP.sellHrs} hours</p>
+      ${me() ? `<button class="btn btn-quiet btn-sm" data-act="switch-me" style="margin-top:8px">${esc(me().name)} &middot; not you?</button>` : ""}
+      <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}</p>
       <p class="note" style="margin-top:3px">${esc(TODAY_WX.t)}, ${TODAY_WX.temp}&deg; today</p>
     </div>
 
@@ -1977,7 +2030,7 @@ function owner_market(mid){
 
     <div>
       <h1 class="page">${esc(m.name)}</h1>
-      <p class="note" style="margin-top:5px">${esc(DAY_FULL[m.day])}s &middot; about ${SHOP.sellHrs} hours &middot; stall fee ${money(feeOf(m))}${feeKnown(m)?"":GUESS}</p>
+      <p class="note" style="margin-top:5px">${esc(DAY_FULL[m.day])}s &middot; ${m.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`} &middot; stall fee ${money(feeOf(m))}${feeKnown(m)?"":GUESS}</p>
     </div>
 
     ${d ? `<div class="card stripe stripe-${d.status==="Closed"?"good":"live"}">
@@ -2393,7 +2446,9 @@ function render(){
   } else {
     app.className = "shell";
     tabs.innerHTML = "";
-    const [body, ft] = SELLER_SCREENS[S.screen] || SELLER_SCREENS.today;
+    const [body, ft] = !S.me            ? [scr_whoami, null]
+                     : !myMarketToday()  ? [scr_dayoff, null]
+                     : (SELLER_SCREENS[S.screen] || SELLER_SCREENS.today);
     app.innerHTML = body();
     foot.innerHTML = ft ? `<div class="sticky-foot"><div class="sticky-foot-in">${ft()}</div></div>` : "";
   }
@@ -2451,6 +2506,15 @@ document.addEventListener("click", e => {
     S.otherPays.splice(Number(t.dataset.paydel), 1);
     render(); return;
   }
+
+  if(t.dataset.me){
+    S.me = t.dataset.me;
+    MY_MARKET = marketOrAny();
+    MY_REC = recommendMarket(MY_MARKET.id);
+    S.screen = "today";
+    render(); window.scrollTo(0,0); return;
+  }
+  if(t.dataset.act==="switch-me"){ S.me = null; render(); window.scrollTo(0,0); return; }
 
   const samp = t.dataset.samp;
   if(samp){
