@@ -703,7 +703,14 @@ const PACKS_PER_COOLER = 50;   // rough, from the shop
 const P_IDS = PRODUCTS.map(p=>p.id);
 const prod = id => PRODUCTS.find(p=>p.id===id);
 
-const COMMISSION = 0.20;      // 20% of the day's total - what the sellers say they actually take
+/* 20% of the money actually taken, not of what the cooler was worth at list
+   price. The sellers add up the cash, Square and anything else in front of
+   them and take a fifth - so anything paid out of the till has already come
+   off it, and anything given away is money they do not earn on.
+
+   Paying on list value instead would overpay whoever discounts hardest and
+   underpay whoever sells chips well, which is backwards on both counts. */
+const COMMISSION = 0.20;
 const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
 const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
 
@@ -1141,7 +1148,7 @@ function dayStats(d){
   const yieldPer = sold>0 ? money_in/sold : 0;
   const fullPer  = sold>0 ? revenue/sold  : 0;
   return { sold, revenue, money_in, yieldPer, fullPer, given:revenue-money_in,
-           hrs, perHr:(revenue-m.fee)/hrs, commission:revenue*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
+           hrs, perHr:(revenue-m.fee)/hrs, commission:money_in*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
 }
 
 function toast(msg){
@@ -1661,7 +1668,7 @@ function scr_result(){
   const fromOwn  = expTotal("own");    // fronted by the seller: the shop owes it back
   const drivePay = driverPay();
   const inHand = moneyIn();
-  const commission = rev * COMMISSION;
+  const commission = inHand * COMMISSION;
   const carGas = carAllowance();
   const owed = commission + drivePay + fromOwn + carGas;
   const returning = P_IDS.reduce((a,p)=>a+(S.closing[p]||0),0);
@@ -1702,7 +1709,7 @@ function scr_result(){
         <p class="note" style="margin-top:8px">${money2(owed/hrs)}/hr across the whole ${hrs.toFixed(1)}-hour day, door to door</p>
       </div>
       <div class="card-pad" style="padding-top:0">
-        <div class="kv"><span class="kv-k">Commission &mdash; ${sold} packs at ${Math.round(COMMISSION*100)}%</span><span class="kv-v">${money2(commission)}</span></div>
+        <div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(COMMISSION*100)}% of ${money2(inHand)}</span><span class="kv-v">${money2(commission)}</span></div>
         ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?" both ways":" one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
         ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
         ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
@@ -1798,7 +1805,7 @@ function liveDay(plan){
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: S.corrections.length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
-             owed: closed ? (revenueTotal()*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
+             owed: closed ? (moneyIn()*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
   const seed = mulberry32(plan.marketId.length*977 + plan.sellerId.length*31 + 7);
@@ -1818,7 +1825,7 @@ function liveDay(plan){
            status: done ? "Closed" : "Set up "+setupAt,
            live: !done, perPack: done ? rev/sold : null, fullPer: listPer,
            overSend: out - sendList, fixes:0,
-           owed: done ? sold*12.7*COMMISSION : 0 };
+           owed: done ? rev*COMMISSION : 0 };
 }
 
 function owner_market(mid){
@@ -2141,7 +2148,7 @@ function owner_people(){
       </div>`;
     })()}
     <div class="card">
-      <div class="card-hd"><h3>This week's pay</h3><span class="pill">${Math.round(COMMISSION*100)}% of sales</span></div>
+      <div class="card-hd"><h3>This week's pay</h3><span class="pill">${Math.round(COMMISSION*100)}% of money taken</span></div>
       <div class="card-pad">
         ${SELLERS.map(s=>{
           const wk = HISTORY.filter(d=>d.sellerId===s.id).slice(-2);
