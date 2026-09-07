@@ -704,7 +704,7 @@ const P_IDS = PRODUCTS.map(p=>p.id);
 const prod = id => PRODUCTS.find(p=>p.id===id);
 
 const COMMISSION = 0.20;      // 20% of the day's total - what the sellers say they actually take
-const DRIVER_LEG_PAY = 0;     // no separate pay for driving - see driverPay()
+const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
 const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
 
 /* One van, two markets. The person going furthest drives and drops the other
@@ -1050,12 +1050,16 @@ function packedByName(){
   return x ? x.name : "You";
 }
 function packedBySomeoneElse(){ return !!S.packedBy && S.packedBy!=="you"; }
-/* Kept at zero on purpose. There was a $10-a-leg payment here for dropping
-   another seller off and collecting them, but nobody could confirm every
-   seller actually gets it - the owner said no extra pay for driving, and the
-   shop already has its own way of settling this. An app that pays it anyway
-   would be introducing a rule rather than recording one. */
-function driverPay(){ return 0; }
+/* Dropping another seller off and collecting them is paid, and it still is
+   here. What the app does not do is advertise the rate. A card headed "$10 a
+   leg for driving", or a figure ticking up as they pick the option, turns a
+   favour into something to chase - and then everybody wants to drop somebody
+   off. It gets paid and it shows up in the payout at the end, which is where
+   a seller should learn what they earned. */
+function driverPay(){
+  const t = S.travel || {};
+  return t.mode==="van" ? (t.legs||0) * DRIVER_LEG_PAY : 0;
+}
 // A flat gas allowance for taking your own car. If instead they filled the tank
 // themselves, that is a receipt line under "money you spent" - never both, or
 // the same gas gets paid twice.
@@ -1956,7 +1960,8 @@ function owner_today(){
   const totRev    = closedOnes.reduce((a,d)=>a+d.rev,0);
   const fees      = TODAY_PLAN.reduce((a,p)=>a+mkt(p.marketId).fee,0);
   const nClosed   = closedOnes.length, nAll = TODAY_PLAN.length;
-  const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0);
+  const dayDriverPay = VAN_RUNS.length * DRIVER_LEG_PAY * 2;   // one drop-off run, both ways
+  const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0) + dayDriverPay;
 
   return `<div class="pad stack">
     <div>
@@ -1967,8 +1972,8 @@ function owner_today(){
     <div class="tiles">
       <div class="tile"><div class="lbl">Packs sold</div><div class="mid">${totSold}</div><div class="tile-sub">${nClosed} of ${nAll} closed</div></div>
       <div class="tile"><div class="lbl">Money in</div><div class="mid">${money(totRev)}</div><div class="tile-sub">cash + card</div></div>
-      <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">what the markets charge</div></div>
-      <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission and money fronted</div></div>
+      <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">${money(dayDriverPay)} driving on top</div></div>
+      <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission, driving, money fronted</div></div>
     </div>
     ${(()=>{
       /* Who is getting the least out of each pack. Says what it costs, and
