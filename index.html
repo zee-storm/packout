@@ -938,7 +938,7 @@ const BLANK = {
   opening:{}, closing:{},
   samples:P_IDS.reduce((a,p)=>(a[p]=0,a),{}), damaged:P_IDS.reduce((a,p)=>(a[p]=0,a),{}),
   endedAt:null,
-  cashCounted:"", cardTotal:"", venmoTotal:"", otherPays:[], float:150,
+  cashCounted:"", cardTotal:"", otherPays:[], float:150,
   soldOut:null, soldOutAt:"", note:"", lead:"",
   showDamaged:false, showLead:false, showSamples:false, showCounts:false,
   submittedAt:null, showFix:false, corrections:[], marketOpen:null,
@@ -1015,7 +1015,7 @@ const money2 = n => "$" + n.toFixed(2);
    rarer goes in otherPays, because a payment kept in a notes box is a payment
    missing from the total, and every money-per-pack reading would be wrong. */
 function moneyIn(){
-  return (Number(S.cashCounted)||0) + (Number(S.cardTotal)||0) + (Number(S.venmoTotal)||0)
+  return (Number(S.cashCounted)||0) + (Number(S.cardTotal)||0)
        + (S.otherPays||[]).reduce((a,o)=>a+(Number(o.amount)||0), 0);
 }
 
@@ -1453,23 +1453,20 @@ function scr_closeout(){
           <label class="lbl" for="card">Square${S.cardTotal===""?` &middot; <span class="needed">needed</span>`:""}</label>
           <input id="card" type="number" inputmode="decimal" placeholder="0" value="${esc(S.cardTotal)}" data-set="cardTotal">
         </div>
-        <div class="field field-money">
-          <label class="lbl" for="venmo">Venmo${S.venmoTotal===""?` &middot; <span class="needed">needed</span>`:""}</label>
-          <input id="venmo" type="number" inputmode="decimal" placeholder="0" value="${esc(S.venmoTotal)}" data-set="venmoTotal">
-        </div>
 
         ${(S.otherPays||[]).map((o,i)=>`
           <div class="row" style="gap:8px;align-items:flex-end">
             <div class="field grow">
               <label class="lbl">Paid how?</label>
-              <input class="inp inp-sm" type="text" placeholder="Crypto, cheque…" value="${esc(o.how)}" data-pay="${i}" data-f="how">
+              <input class="inp inp-sm" type="text" placeholder="Venmo, crypto, cheque…" value="${esc(o.how)}" data-pay="${i}" data-f="how">
             </div>
             <div class="field field-money bare" style="width:118px">
               <input class="inp inp-sm" type="number" inputmode="decimal" placeholder="0" value="${esc(o.amount)}" data-pay="${i}" data-f="amount">
             </div>
             <button class="btn-quiet" data-paydel="${i}" style="flex:0 0 46px;min-height:46px" aria-label="Remove this line">&times;</button>
           </div>`).join("")}
-        <button class="btn btn-quiet btn-sm" data-act="addpay" style="width:auto">Paid some other way</button>
+        <button class="btn btn-quiet btn-sm" data-act="addpay" style="width:auto">Someone paid another way</button>
+        <p class="note" style="margin:0;font-size:12.5px">Venmo, crypto, a cheque &mdash; anything that isn't cash or Square. Only if it happened.</p>
 
         <div class="field">
           <label class="lbl" for="note">Anything worth knowing? (optional)</label>
@@ -1604,7 +1601,6 @@ function closeoutMissing(){
   if(S.soldOut===null) m.push({ label:"did you sell out", sel:"[data-sold='no']" });
   if(S.cashCounted==="") m.push({ label:"cash counted", sel:"#cash" });
   if(S.cardTotal==="")   m.push({ label:"Square total",  sel:"#card" });
-  if(S.venmoTotal==="")  m.push({ label:"Venmo total",   sel:"#venmo" });
   return m;
 }
 function foot_closeout(){
@@ -1624,7 +1620,6 @@ function scr_result(){
   const sold = soldTotal();
   const rev = revenueTotal();
   const cash = Number(S.cashCounted)||0, card = Number(S.cardTotal)||0;
-  const venmo = Number(S.venmoTotal)||0;
   const otherPay = (S.otherPays||[]).reduce((a,o)=>a+(Number(o.amount)||0), 0);
   const disc = Number(S.discounts)||0;
   const fromTill = expTotal("till");   // spent out of the register: the till is legitimately light
@@ -1684,7 +1679,6 @@ function scr_result(){
       <div class="card-pad" style="padding-top:0">
         <div class="kv"><span class="kv-k">Cash taken</span><span class="kv-v">${money2(cash)}</span></div>
         <div class="kv"><span class="kv-k">Square</span><span class="kv-v">${money2(card)}</span></div>
-        ${venmo ? `<div class="kv"><span class="kv-k">Venmo</span><span class="kv-v">${money2(venmo)}</span></div>` : ""}
         ${(S.otherPays||[]).filter(o=>Number(o.amount)).map(o=>`<div class="kv"><span class="kv-k">${esc(o.how||"Other")}</span><span class="kv-v">${money2(Number(o.amount)||0)}</span></div>`).join("")}
         ${fromTill ? `<div class="kv"><span class="kv-k">Spent out of the till</span><span class="kv-v">${money2(fromTill)}</span></div>` : ""}
         <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(gross)}</span></div>
@@ -2413,7 +2407,7 @@ document.addEventListener("change", e => {
     render();
   } else {
     S[key] = el.value;
-    if(key==="cashCounted"||key==="cardTotal"||key==="venmoTotal") render();
+    if(key==="cashCounted"||key==="cardTotal") render();
   }
 });
 
