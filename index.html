@@ -703,10 +703,10 @@ const PACKS_PER_COOLER = 50;   // rough, from the shop
 const P_IDS = PRODUCTS.map(p=>p.id);
 const prod = id => PRODUCTS.find(p=>p.id===id);
 
-/* 20% of the money actually taken, not of what the cooler was worth at list
-   price. The sellers add up the cash, Square and anything else in front of
-   them and take a fifth - so anything paid out of the till has already come
-   off it, and anything given away is money they do not earn on.
+/* 20% of everything the day sold, not of what the cooler was worth at list
+   price. Anything bought out of the till - ice, parking - is the shop's cost
+   rather than the seller's, so it does not shrink their pay. Anything given
+   away is money they never earn on, which is the point.
 
    Paying on list value instead would overpay whoever discounts hardest and
    underpay whoever sells chips well, which is backwards on both counts. */
@@ -1668,7 +1668,8 @@ function scr_result(){
   const fromOwn  = expTotal("own");    // fronted by the seller: the shop owes it back
   const drivePay = driverPay();
   const inHand = moneyIn();
-  const commission = inHand * COMMISSION;
+  const dayTook = inHand + fromTill;             // everything the day sold
+  const commission = dayTook * COMMISSION;
   const carGas = carAllowance();
   const owed = commission + drivePay + fromOwn + carGas;
   const returning = P_IDS.reduce((a,p)=>a+(S.closing[p]||0),0);
@@ -1682,7 +1683,7 @@ function scr_result(){
      with another vendor. None of that is provable from a count, and the owner
      does not chase it, so the app reports the number and passes no verdict.
      Only a genuinely broken figure - a miscount, a lost envelope - is flagged. */
-  const gross      = inHand + fromTill;
+  const gross      = dayTook;
   /* Chips are not counted stock, so their takings must come out before the
      packs are divided into the money. Left in, every pack would look like it
      brought in more than $15 and the number would stop meaning anything. */
@@ -1709,7 +1710,7 @@ function scr_result(){
         <p class="note" style="margin-top:8px">${money2(owed/hrs)}/hr across the whole ${hrs.toFixed(1)}-hour day, door to door</p>
       </div>
       <div class="card-pad" style="padding-top:0">
-        <div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(COMMISSION*100)}% of ${money2(inHand)}</span><span class="kv-v">${money2(commission)}</span></div>
+        <div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(COMMISSION*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(commission)}</span></div>
         ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?" both ways":" one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
         ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
         ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
@@ -1805,7 +1806,7 @@ function liveDay(plan){
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: S.corrections.length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
-             owed: closed ? (moneyIn()*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
+             owed: closed ? ((moneyIn()+expTotal("till"))*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
   const seed = mulberry32(plan.marketId.length*977 + plan.sellerId.length*31 + 7);
