@@ -718,7 +718,6 @@ const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
    off on the way, so the shop pays that gas once and it gets split between them.
    The $20 driver pay is NOT charged to a market - it is payroll the shop owes
    the driver, same as commission or paying someone back for ice. */
-const VAN_RUNS = [ { driver:"marin", riders:["ferry"] } ];
 function gasFor(min){ return Math.round(min * 2 * 0.35); }
 function vanRunFor(mid){ return VAN_RUNS.find(r => r.driver===mid || r.riders.indexOf(mid)>=0); }
 function vanCostFor(mid){
@@ -731,27 +730,131 @@ function vanCostFor(mid){
   return { ride: rider ? DRIVER_LEG_PAY*2 : 0, gas, shareNames: others.map(r=>mkt(r).name), rider };
 }
 
-const MARKETS = [
-  { id:"grand",  name:"Grand Lake",        city:"Oakland",     hours:"9:00 \u2013 2:00", sellHrs:5, fee:85,  driveMin:20, size:1.35,
-    stall:"B-14", loadIn:"7:15am", manager:"Dana Whitfield", phone:"(510) 555-0142", ride:false },
-  { id:"ferry",  name:"Ferry Building",    city:"San Francisco",hours:"8:00 \u2013 2:00", sellHrs:6, fee:145, driveMin:40, size:1.50,
-    stall:"North Arcade 7", loadIn:"6:30am", manager:"Priya Raman", phone:"(415) 555-0188", ride:true },
-  { id:"temes",  name:"Temescal",          city:"Oakland",     hours:"9:00 \u2013 1:00", sellHrs:4, fee:65,  driveMin:25, size:1.00,
-    stall:"A-3", loadIn:"7:45am", manager:"Marcus Ellery", phone:"(510) 555-0119", ride:false },
-  { id:"sanmat", name:"San Mateo",         city:"San Mateo",   hours:"9:00 \u2013 1:00", sellHrs:4, fee:70,  driveMin:45, size:0.85,
-    stall:"C-22", loadIn:"7:30am", manager:"Joyce Tran", phone:"(650) 555-0164", ride:true },
-  { id:"marin",  name:"Marin Civic Center",city:"San Rafael",  hours:"8:00 \u2013 1:00", sellHrs:5, fee:95,  driveMin:55, size:1.20,
-    stall:"D-9", loadIn:"6:45am", manager:"Hal Brenner", phone:"(415) 555-0173", ride:true }
-];
-const mkt = id => MARKETS.find(m=>m.id===id);
+/* ---- The real operation ----
+   Forty-six market slots a week across the seven days. A place that runs on
+   more than one day is a separate market each time: Berkeley on Monday sells
+   nothing like Berkeley on Thursday, and lumping them would average away the
+   only thing worth knowing. The Kaiser sites are their own markets too, not
+   versions of the town they sit in.
+
+   crew is who normally works it. Fourteen slots have nobody listed - those are
+   worked, the name just was not written down, so they show as unassigned
+   rather than as days off.
+
+   What is NOT here yet, because nobody has been asked market by market: the
+   stall fee, the opening hours, and the drive. The owner gave ranges only -
+   $45 to $95, four hours almost everywhere, around 45 minutes - so those live
+   in SHOP below as shop-wide defaults and every screen marks them as guesses.
+   Fill a real value in on a market and the guess label goes away by itself. */
+
+const SHOP = {
+  sellHrs: 4,          // he says 99% of them are four hours - this one is real
+  fee: null,           // $45-$95 depending on the market, nobody has said which
+  driveMin: 45,        // "avg 45, sometimes more or less"
+  feeLow: 45, feeHigh: 95
+};
 
 const SELLERS = [
-  { id:"maria", name:"Maria Reyes", phone:"(510) 555-0121",  base:1.16, urban:0.16,  giveRate:0.02 },
-  { id:"jose",  name:"Jos\u00E9 Luna", phone:"(510) 555-0148",    base:1.04, urban:-0.18, giveRate:0.03 },
-  { id:"carla", name:"Carla Mendez", phone:"(510) 555-0176", base:0.96, urban:0.02,  giveRate:0.02 },
-  { id:"danny", name:"Danny Ortiz", phone:"(510) 555-0193",  base:1.01, urban:0.0,   giveRate:0.14 }
+  { id:"ali", name:"Ali" },
+  { id:"almas", name:"Almas" },
+  { id:"amin", name:"Amin" },
+  { id:"bahir", name:"Bahir" },
+  { id:"billal", name:"Billal" },
+  { id:"brook", name:"Brook" },
+  { id:"daud", name:"Daud" },
+  { id:"emilio", name:"Emilio" },
+  { id:"habid", name:"Habid" },
+  { id:"joey", name:"Joey" },
+  { id:"musawir", name:"Musawir" },
+  { id:"muzamil", name:"Muzamil" },
+  { id:"nawid", name:"Nawid" },
+  { id:"suliman", name:"Suliman" },
+  { id:"young", name:"Young" },
+  { id:"zack", name:"Zack" }
 ];
+
+const MARKETS = [
+  { id:"fairfield-mon", name:"Fairfield", day:"Mon", crew:["emilio"], vehicle:null },
+  { id:"modesto-mon", name:"Modesto", day:"Mon", crew:["muzamil"], vehicle:null },
+  { id:"berkeley-mon", name:"Berkeley", day:"Mon", crew:[], vehicle:null },
+  { id:"oakland-mon", name:"Oakland", day:"Mon", crew:["billal"], vehicle:null },
+  { id:"martinezkaiser-mon", name:"Martinez Kaiser", day:"Mon", crew:[], vehicle:null },
+  { id:"concord-tue", name:"Concord", day:"Tue", crew:[], vehicle:null },
+  { id:"berkeley-tue", name:"Berkeley", day:"Tue", crew:["billal"], vehicle:null },
+  { id:"sanleandro-tue", name:"San Leandro", day:"Tue", crew:[], vehicle:null },
+  { id:"martinez-tue", name:"Martinez", day:"Tue", crew:[], vehicle:null },
+  { id:"walnutcreekkaiser-wed", name:"Walnut Creek Kaiser", day:"Wed", crew:["habid"], vehicle:null },
+  { id:"paloalto-wed", name:"Palo Alto", day:"Wed", crew:[], vehicle:null },
+  { id:"santarosa-wed", name:"Santa Rosa", day:"Wed", crew:[], vehicle:null },
+  { id:"sanleandro-wed", name:"San Leandro", day:"Wed", crew:[], vehicle:null },
+  { id:"sanrafael-thu", name:"San Rafael", day:"Thu", crew:[], vehicle:null },
+  { id:"richmondkaiser-thu", name:"Richmond Kaiser", day:"Thu", crew:[], vehicle:null },
+  { id:"losaltos-thu", name:"Los Altos", day:"Thu", crew:[], vehicle:null },
+  { id:"berkeley-thu", name:"Berkeley", day:"Thu", crew:[], vehicle:null },
+  { id:"vallejokaiser-fri", name:"Vallejo Kaiser", day:"Fri", crew:["muzamil"], vehicle:null },
+  { id:"oaklandkaiser-fri", name:"Oakland Kaiser", day:"Fri", crew:["joey"], vehicle:null },
+  { id:"martinezkaiser-fri", name:"Martinez Kaiser", day:"Fri", crew:[], vehicle:null },
+  { id:"rossmoor-fri", name:"Rossmoor", day:"Fri", crew:["bahir"], vehicle:null },
+  { id:"natomas-sat", name:"Natomas", day:"Sat", crew:["bahir"], vehicle:"Grey minivan" },
+  { id:"orinda-sat", name:"Orinda", day:"Sat", crew:["ali"], vehicle:null },
+  { id:"pleasanthill-sat", name:"Pleasant Hill", day:"Sat", crew:["suliman"], vehicle:null },
+  { id:"sunnyvale-sat", name:"Sunnyvale", day:"Sat", crew:["muzamil"], vehicle:null },
+  { id:"diablo-sat", name:"Diablo", day:"Sat", crew:["billal"], vehicle:null },
+  { id:"oakland-sat", name:"Oakland", day:"Sat", crew:["almas","musawir"], vehicle:null },
+  { id:"pinole-sat", name:"Pinole", day:"Sat", crew:["muzamil","young"], vehicle:null },
+  { id:"brentwood-sat", name:"Brentwood", day:"Sat", crew:["daud"], vehicle:null },
+  { id:"northbeach-sat", name:"North Beach", day:"Sat", crew:[], vehicle:null },
+  { id:"alameda-sat", name:"Alameda", day:"Sat", crew:["zack"], vehicle:null },
+  { id:"hayward-sat", name:"Hayward", day:"Sat", crew:["emilio"], vehicle:null },
+  { id:"mountainview-sun", name:"Mountain View", day:"Sun", crew:["nawid","zack"], vehicle:"Own car" },
+  { id:"livermore-sun", name:"Livermore", day:"Sun", crew:["muzamil"], vehicle:"Own car" },
+  { id:"temescal-sun", name:"Temescal", day:"Sun", crew:["billal"], vehicle:"Own car" },
+  { id:"montclair-sun", name:"Montclair", day:"Sun", crew:["young","muzamil"], vehicle:null },
+  { id:"stonestown-sun", name:"Stonestown", day:"Sun", crew:["bahir"], vehicle:"Gold van" },
+  { id:"fortmason-sun", name:"Fort Mason", day:"Sun", crew:["joey"], vehicle:null },
+  { id:"divisadero-sun", name:"Divisadero", day:"Sun", crew:["amin"], vehicle:"Cargo van" },
+  { id:"martinez-sun", name:"Martinez", day:"Sun", crew:["brook"], vehicle:"Own car" },
+  { id:"kensington-sun", name:"Kensington", day:"Sun", crew:["almas"], vehicle:"White minivan" },
+  { id:"sanrafael-sun", name:"San Rafael", day:"Sun", crew:["musawir"], vehicle:"White minivan" },
+  { id:"moraga-sun", name:"Moraga", day:"Sun", crew:["daud"], vehicle:"Gold van" },
+  { id:"antioch-sun", name:"Antioch", day:"Sun", crew:["ali"], vehicle:"Acura" },
+  { id:"walnutcreek-sun", name:"Walnut Creek", day:"Sun", crew:["suliman"], vehicle:null },
+  { id:"westoakland-sun", name:"West Oakland", day:"Sun", crew:["emilio"], vehicle:"Own car" }
+];
+const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DAY_FULL = { Sun:"Sunday", Mon:"Monday", Tue:"Tuesday", Wed:"Wednesday",
+                   Thu:"Thursday", Fri:"Friday", Sat:"Saturday" };
+// Shown wherever a number is the shop-wide guess rather than this market's own.
+const GUESS = ' <span class="chip">not set</span>';
+const feeKnown = m => m.fee != null;
+const feeOf    = m => m.fee != null ? m.fee : Math.round((SHOP.feeLow + SHOP.feeHigh) / 2);
+
+const mkt = id => MARKETS.find(m=>m.id===id);
 const slr = id => SELLERS.find(s=>s.id===id);
+
+/* Placeholder traits behind the sample history below. How well somebody sells,
+   how big a market is, how much walks out free - none of that exists until
+   real days are recorded. Seeded so the demo is stable, and attached to real
+   names only because the screens need something to draw. Nothing here is a
+   claim about an actual person. */
+(() => {
+  const r = mulberry32(31337);
+  SELLERS.forEach(s => { s.base = 0.92 + r()*0.26; s.urban = -0.18 + r()*0.36; s.giveRate = 0.02 + r()*0.12; });
+  MARKETS.forEach(m => { m.size = 0.80 + r()*0.70; m.sellHrs = SHOP.sellHrs; m.driveMin = SHOP.driveMin; });
+})();
+
+/* Who shares a van. The schedule records a vehicle against some slots, so two
+   markets on the same vehicle on the same day are one run - derived rather
+   than declared, and empty on days nobody doubled up. */
+const VAN_RUNS = (()=>{
+  const byDayVehicle = {};
+  MARKETS.forEach(m => {
+    if(!m.vehicle || m.vehicle === "Own car") return;
+    (byDayVehicle[m.day + "|" + m.vehicle] ||= []).push(m.id);
+  });
+  return Object.values(byDayVehicle).filter(ids => ids.length > 1)
+    .map(ids => ({ driver: ids[0], riders: ids.slice(1) }));
+})();
 
 // Product mix differs by market \u2014 the app should find this
 /* Placeholder demand mix. Which flavours move at which market can only come
@@ -769,7 +872,7 @@ const MIX = (()=>{
   return out;
 })();
 // Urban-leaning markets, for seller affinity
-const URBAN = { ferry:1, grand:1, temes:0.4, sanmat:0, marin:0.15 };
+const URBAN = (()=>{ const r = mulberry32(5150), o = {}; MARKETS.forEach(m => o[m.id] = r()); return o; })();
 
 /* How much a given kind of day moves sales. Used two ways: to stop a rained-out
    Saturday from dragging down a market's average, and to size the send list to
@@ -778,13 +881,12 @@ const WX_MULT = { "Clear":1.0, "Overcast":0.94, "Fog":0.90, "Rain":0.58, "Windy"
 const wxMult = t => WX_MULT[t] || 1;
 
 const TODAY_WX = { t:"Clear", temp:74 };
-const FORECAST = {
-  grand:  { t:"Clear",    temp:76 },
-  ferry:  { t:"Fog",      temp:58 },
-  temes:  { t:"Clear",    temp:74 },
-  sanmat: { t:"Rain",     temp:55 },
-  marin:  { t:"Overcast", temp:63 }
-};
+const FORECAST = (()=>{
+  const r = mulberry32(2718), o = {};
+  const kinds = Object.keys(WX_MULT);
+  MARKETS.forEach(m => o[m.id] = { t: kinds[Math.floor(r()*kinds.length)], temp: 62 + Math.round(r()*22) });
+  return o;
+})();
 
 const WEATHER = [
   { t:"Clear", temp:72, mult:1.0 }, { t:"Clear", temp:78, mult:1.02 },
@@ -808,16 +910,19 @@ const fmtShort = d => d.toLocaleDateString(undefined,{month:"short",day:"numeric
    Generate 8 weeks of history
    ========================================================= */
 
-const ROTA = [ // who worked where, week by week (index = weeks ago - 1)
-  { grand:"maria", ferry:"jose",  temes:"carla", sanmat:"danny", marin:"maria" },
-  { grand:"carla", ferry:"maria", temes:"danny", sanmat:"jose",  marin:"carla" },
-  { grand:"maria", ferry:"jose",  temes:"carla", sanmat:"danny", marin:"jose"  },
-  { grand:"danny", ferry:"maria", temes:"jose",  sanmat:"carla", marin:"maria" },
-  { grand:"maria", ferry:"jose",  temes:"danny", sanmat:"carla", marin:"carla" },
-  { grand:"carla", ferry:"maria", temes:"maria", sanmat:"jose",  marin:"danny" },
-  { grand:"jose",  ferry:"carla", temes:"danny", sanmat:"maria", marin:"maria" },
-  { grand:"maria", ferry:"jose",  temes:"carla", sanmat:"danny", marin:"jose"  }
-];
+const ROTA = (()=>{
+  // Prefer the person who normally works that market; fall back to anyone,
+  // since the owner rotates people through when somebody is not doing well.
+  const r = mulberry32(8642);
+  return Array.from({length:8}, () => {
+    const week = {};
+    MARKETS.forEach(m => {
+      const pool = m.crew.length ? m.crew : SELLERS.map(s=>s.id);
+      week[m.id] = pool[Math.floor(r()*pool.length)];
+    });
+    return week;
+  });
+})();
 
 function sellerMult(sid, mid){
   const s = slr(sid);
@@ -885,13 +990,15 @@ for(let w=8; w>=1; w--){
    Today
    ========================================================= */
 
-const TODAY_PLAN = [
-  { marketId:"grand",  sellerId:"carla", status:"done"    },
-  { marketId:"ferry",  sellerId:"jose",  status:"selling" },
-  { marketId:"marin",  sellerId:"danny", status:"selling" },
-  { marketId:"sanmat", sellerId:"maria", status:"selling" },
-  { marketId:"temes",  sellerId:"you",   status:"assigned"} // <- the phone user
-];
+/* Today is whichever markets run on today's weekday - fourteen of them on a
+   Sunday. A slot with nobody named is shown as unassigned rather than hidden:
+   the owner needs to see the gap. */
+const TODAY_MARKETS = MARKETS.filter(m => m.day === DAYS[TODAY.getDay()]);
+const TODAY_PLAN = TODAY_MARKETS.map((m, i) => ({
+  marketId: m.id,
+  sellerId: i === 0 ? "you" : (m.crew[0] || null),
+  status: i === 0 ? "assigned" : (i % 3 === 0 ? "done" : "selling")
+}));
 
 /* ---- how much to send: the flagship calculation ---- */
 function recommend(marketId, productId){
@@ -1020,8 +1127,8 @@ function load(){
 }
 function reset(){ S = JSON.parse(JSON.stringify(BLANK)); save(); render(); }
 
-const MY_MARKET = mkt("temes");
-const MY_REC = recommendMarket("temes");
+const MY_MARKET = TODAY_MARKETS[0] || MARKETS[0];
+const MY_REC = recommendMarket(MY_MARKET.id);
 
 /* =========================================================
    Helpers
@@ -1148,7 +1255,7 @@ function dayStats(d){
   const yieldPer = sold>0 ? money_in/sold : 0;
   const fullPer  = sold>0 ? revenue/sold  : 0;
   return { sold, revenue, money_in, yieldPer, fullPer, given:revenue-money_in,
-           hrs, perHr:(revenue-m.fee)/hrs, commission:money_in*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
+           hrs, perHr:(revenue-feeOf(m))/hrs, commission:money_in*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
 }
 
 function toast(msg){
@@ -1201,7 +1308,7 @@ function scr_today(){
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
-      <p class="note" style="margin-top:5px">${esc(MY_MARKET.city)} \u00B7 ${esc(MY_MARKET.hours)} \u00B7 Stall ${esc(MY_MARKET.stall)}</p>
+      <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; about ${SHOP.sellHrs} hours</p>
       <p class="note" style="margin-top:3px">${esc(TODAY_WX.t)}, ${TODAY_WX.temp}&deg; today</p>
     </div>
 
@@ -1232,7 +1339,7 @@ function scr_today(){
       <div class="spread">
         <div>
           <div class="lbl">Load-in</div>
-          <div class="mid" style="margin-top:5px">${esc(MY_MARKET.loadIn)}</div>
+          <div class="mid" style="margin-top:5px">An hour early</div>
         </div>
         <div style="text-align:right">
           <div class="lbl">Anything wrong</div>
@@ -1367,7 +1474,7 @@ function scr_market(){
          </label>`}
 
     <div class="hint">
-      Load-in is <b>${esc(MY_MARKET.loadIn)}</b> at stall <b>${esc(MY_MARKET.stall)}</b>.
+      Get there <b>an hour before it opens</b>.
       The photo shows the shop the booth was actually up and ready, not just that you got there.
     </div>
 
@@ -1808,6 +1915,14 @@ function liveDay(plan){
              owed: closed ? ((moneyIn()+expTotal("till"))*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
+  if(!s){
+    // Nobody written down for this slot. It still runs - the owner needs to
+    // see the gap rather than have the market quietly vanish off Today.
+    return { name:"Nobody assigned", phone:null, sold:null, rev:null,
+             out:recommendMarket(plan.marketId).total, status:"No name yet",
+             live:false, perPack:null, fullPer:null, overSend:0, fixes:0, owed:0,
+             unassigned:true };
+  }
   const seed = mulberry32(plan.marketId.length*977 + plan.sellerId.length*31 + 7);
   const done = plan.status==="done";
   const sold = done ? Math.round(100*m.size*sellerMult(plan.sellerId,plan.marketId)*(0.95+seed()*0.12)) : null;
@@ -1817,11 +1932,11 @@ function liveDay(plan){
   const rev = done ? Math.round(sold*listPer*(1-s.giveRate)) : null;
   const sendListQty = recommendMarket(plan.marketId).total;
   // sellers normally take exactly what the send list says; deviations should be rare enough to mean something
-  const out = plan.marketId==="ferry" ? sendListQty-24 : sendListQty;
+  const out = sendListQty;
   const hash = [...plan.marketId].reduce((a,c)=>a+c.charCodeAt(0),0);
   const setupAt = ["7:12am","6:38am","7:41am","7:26am","6:52am"][hash % 5];
   const sendList = sendListQty;
-  return { name:s.name, phone:s.phone, sold, rev, out,
+  return { name:s.name, phone:null, sold, rev, out,
            status: done ? "Closed" : "Set up "+setupAt,
            live: !done, perPack: done ? rev/sold : null, fullPer: listPer,
            overSend: out - sendList, fixes:0,
@@ -1834,7 +1949,7 @@ function owner_market(mid){
   const st = days.map(dayStats);
   const rev = st.reduce((a,x)=>a+x.revenue,0)/st.length;
   const vc = vanCostFor(mid);
-  const dayCost = m.fee + vc.gas;
+  const dayCost = feeOf(m) + vc.gas;
   const hrs = hoursWorked(m);
   const perHr = (rev - dayCost)/hrs;
   const recent = st.slice(-3).reduce((a,x)=>a+x.revenue,0)/3;
@@ -1843,7 +1958,7 @@ function owner_market(mid){
   const rec = recommendMarket(mid);
   const plan = TODAY_PLAN.find(p=>p.marketId===mid);
   const d = plan ? liveDay(plan) : null;
-  const mine = mid==="temes" && S.photo;
+  const mine = mid===MY_MARKET.id && S.photo;
 
   const rows = days.slice().reverse().map(x=>{
     const k = dayStats(x);
@@ -1862,7 +1977,7 @@ function owner_market(mid){
 
     <div>
       <h1 class="page">${esc(m.name)}</h1>
-      <p class="note" style="margin-top:5px">${esc(m.city)} &middot; ${esc(m.hours)} &middot; Stall ${esc(m.stall)}</p>
+      <p class="note" style="margin-top:5px">${esc(DAY_FULL[m.day])}s &middot; about ${SHOP.sellHrs} hours &middot; stall fee ${money(feeOf(m))}${feeKnown(m)?"":GUESS}</p>
     </div>
 
     ${d ? `<div class="card stripe stripe-${d.status==="Closed"?"good":"live"}">
@@ -1884,7 +1999,7 @@ function owner_market(mid){
     <div class="tiles">
       <div class="tile"><div class="lbl">Average day</div><div class="mid">${money(rev)}</div><div class="tile-sub">last ${days.length} times</div></div>
       <div class="tile"><div class="lbl">Per hour</div><div class="mid">${money(perHr)}</div><div class="tile-sub">${hrs.toFixed(1)} hrs door to door</div></div>
-      <div class="tile"><div class="lbl">Costs</div><div class="mid">${money(dayCost)}</div><div class="tile-sub">${money(m.fee)} stall + ${money(vc.gas)} gas</div></div>
+      <div class="tile"><div class="lbl">Costs</div><div class="mid">${money(dayCost)}</div><div class="tile-sub">${money(feeOf(m))} stall + ${money(vc.gas)} gas</div></div>
       <div class="tile"><div class="lbl">Trend</div><div class="mid ${trend>=0?"up":"down"}">${trend>=0?"+":""}${trend.toFixed(0)}%</div><div class="tile-sub">last 3 vs first 3</div></div>
     </div>
 
@@ -1899,9 +2014,9 @@ function owner_market(mid){
     <div class="card">
       <div class="card-hd"><h3>The details</h3></div>
       <div class="card-pad">
-        <div class="kv"><span class="kv-k">Load-in</span><span class="kv-v">${esc(m.loadIn)}</span></div>
-        <div class="kv"><span class="kv-k">Stall</span><span class="kv-v">${esc(m.stall)}</span></div>
-        <div class="kv"><span class="kv-k">Stall fee</span><span class="kv-v">${money(m.fee)}</span></div>
+        <div class="kv"><span class="kv-k">Runs</span><span class="kv-v">${esc(DAY_FULL[m.day])}s</span></div>
+        <div class="kv"><span class="kv-k">Normally worked by</span><span class="kv-v">${m.crew.length ? m.crew.map(c=>esc(slr(c).name.split(" ")[0])).join(", ") : "nobody named"}</span></div>
+        <div class="kv"><span class="kv-k">Stall fee</span><span class="kv-v">${money(feeOf(m))}${feeKnown(m)?"":GUESS}</span></div>
         <div class="kv"><span class="kv-k">Drive</span><span class="kv-v">${m.driveMin} min each way</span></div>
         <div class="kv"><span class="kv-k">Van</span><span class="kv-v">${vc.shareNames.length?"shares with "+esc(vc.shareNames.join(", ")):"own trip"}</span></div>
       </div>
@@ -1955,7 +2070,7 @@ function owner_today(){
              <div><div class="lbl">Money</div><div class="mid" style="margin-top:5px">${money(d.rev)}</div></div>`
           : `<div><div class="lbl">Took out</div><div class="mid" style="margin-top:5px">${d.out||0}</div></div>
              <div><div class="lbl">Reports at</div><div class="mid" style="margin-top:5px">close</div></div>`}
-        <div style="margin-left:auto;text-align:right"><div class="lbl">Stall fee</div><div class="mid" style="margin-top:5px">${money(m.fee)}</div></div>
+        <div style="margin-left:auto;text-align:right"><div class="lbl">Stall fee</div><div class="mid" style="margin-top:5px">${money(feeOf(m))}</div></div>
       </div>
       ${(d.overSend || d.fixes || d.packedByOther) ? `<div class="card-pad" style="padding-top:0"><div class="chips">
         ${d.overSend ? `<span class="chip chip-hi">took ${d.overSend>0?"+":"\u2212"}${Math.abs(d.overSend)} vs send list</span>` : ""}
@@ -1969,7 +2084,8 @@ function owner_today(){
   const closedOnes= all.filter(d=>d.status==="Closed");
   const totSold   = closedOnes.reduce((a,d)=>a+d.sold,0);
   const totRev    = closedOnes.reduce((a,d)=>a+d.rev,0);
-  const fees      = TODAY_PLAN.reduce((a,p)=>a+mkt(p.marketId).fee,0);
+  const fees      = TODAY_PLAN.reduce((a,p)=>a+feeOf(mkt(p.marketId)),0);
+  const feesAreGuessed = TODAY_PLAN.every(p => !feeKnown(mkt(p.marketId)));
   const nClosed   = closedOnes.length, nAll = TODAY_PLAN.length;
   const dayDriverPay = VAN_RUNS.length * DRIVER_LEG_PAY * 2;   // one drop-off run, both ways
   const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0) + dayDriverPay;
@@ -1977,13 +2093,13 @@ function owner_today(){
   return `<div class="pad stack">
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
-      <h1 class="page" style="margin-top:6px">5 markets running</h1>
+      <h1 class="page" style="margin-top:6px">${nAll} market${nAll===1?"":"s"} running</h1>
       <p class="note" style="margin-top:5px">Numbers land as each market closes out. Nobody is on their phone while they sell.</p>
     </div>
     <div class="tiles">
       <div class="tile"><div class="lbl">Packs sold</div><div class="mid">${totSold}</div><div class="tile-sub">${nClosed} of ${nAll} closed</div></div>
       <div class="tile"><div class="lbl">Money in</div><div class="mid">${money(totRev)}</div><div class="tile-sub">cash + card</div></div>
-      <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">${money(dayDriverPay)} driving on top</div></div>
+      <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">${feesAreGuessed?`estimate &mdash; no real fees entered yet`:`${money(dayDriverPay)} driving on top`}</div></div>
       <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission, driving, money fronted</div></div>
     </div>
     ${(()=>{
@@ -2029,7 +2145,7 @@ function owner_send(){
   const rows = MARKETS.map(m=>{
     const r = recommendMarket(m.id);
     return `<tr>
-      <td><div class="who">${esc(m.name)}</div><div class="sub">${esc(m.city)}</div></td>
+      <td><div class="who">${esc(m.name)}</div><div class="sub">${esc(m.day)}</div></td>
       ${P_IDS.map(pid=>{
         const rec = r.byProduct[pid];
         const hi = rec.anySoldOut;
@@ -2173,8 +2289,8 @@ function owner_markets(){
     const trend = (recent/older-1)*100;
     const hrs = hoursWorked(m);
     const vc = vanCostFor(m.id);
-    const dayCost = m.fee + vc.gas;
-    const soloCost = m.fee + gasFor(m.driveMin);   // what it would cost on its own trip
+    const dayCost = feeOf(m) + vc.gas;
+    const soloCost = feeOf(m) + gasFor(m.driveMin);   // what it would cost on its own trip
     const perHrTrue = (rev - dayCost)/hrs;
     return { m, rev, perHr:perHrTrue, trend, hrs,
              rideCost:vc.ride, gas:vc.gas, dayCost, soloCost,
@@ -2186,7 +2302,7 @@ function owner_markets(){
   const best = rows[0], worst = rows[rows.length-1];
 
   const body = rows.map(r=>`<tr data-market="${r.m.id}" style="cursor:pointer">
-    <td><div class="who" style="color:var(--accent)">${esc(r.m.name)}</div><div class="sub">${esc(r.m.city)} \u00B7 ${r.m.driveMin}min drive</div></td>
+    <td><div class="who" style="color:var(--accent)">${esc(r.m.name)}</div><div class="sub">${esc(r.m.day)} \u00B7 ${r.m.driveMin}min drive</div></td>
     <td class="n">${money(r.rev)}</td>
     <td class="n">${money(r.dayCost)}${r.shareNames.length?`<div class="sub">shares a van</div>`:""}</td>
     <td class="n">${r.hrs.toFixed(1)}</td>
@@ -2202,7 +2318,7 @@ function owner_markets(){
     <div class="tiles">
       <div class="tile"><div class="lbl">Best per hour</div><div class="mid">${money(best.perHr)}</div><div class="tile-sub">${esc(best.m.name)}</div></div>
       <div class="tile"><div class="lbl">Worst per hour</div><div class="mid">${money(worst.perHr)}</div><div class="tile-sub">${esc(worst.m.name)}</div></div>
-      <div class="tile"><div class="lbl">Weekly revenue</div><div class="mid">${money(rows.reduce((a,r)=>a+r.rev,0))}</div><div class="tile-sub">5 markets</div></div>
+      <div class="tile"><div class="lbl">Weekly revenue</div><div class="mid">${money(rows.reduce((a,r)=>a+r.rev,0))}</div><div class="tile-sub">${MARKETS.length} slots a week</div></div>
       <div class="tile"><div class="lbl">Weekly costs</div><div class="mid">${money(rows.reduce((a,r)=>a+r.dayCost,0))}</div><div class="tile-sub">stalls, gas, rides</div></div>
     </div>
     <div class="card">
