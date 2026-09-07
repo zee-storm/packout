@@ -1675,7 +1675,6 @@ function scr_result(){
   const returning = P_IDS.reduce((a,p)=>a+(S.closing[p]||0),0);
   const samples = P_IDS.reduce((a,p)=>a+(S.samples[p]||0),0);
   const sampleValue = P_IDS.reduce((a,p)=>a+(S.samples[p]||0)*prod(p).price,0);
-  const hrs = hoursWorked(MY_MARKET);
 
   /* Money per pack, not a shortfall. Anything spent out of the till was still
      collected, so it counts as money in. What is left of full price is what got
@@ -1707,7 +1706,7 @@ function scr_result(){
       <div class="card-pad">
         <div class="lbl">The shop owes you</div>
         <div class="big" style="margin-top:8px">${money2(owed)}</div>
-        <p class="note" style="margin-top:8px">${money2(owed/hrs)}/hr across the whole ${hrs.toFixed(1)}-hour day, door to door</p>
+        <p class="note" style="margin-top:8px">${sold} items sold at ${esc(MY_MARKET.name)}</p>
       </div>
       <div class="card-pad" style="padding-top:0">
         <div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(COMMISSION*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(commission)}</span></div>
