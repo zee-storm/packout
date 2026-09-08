@@ -678,8 +678,8 @@ const PRODUCTS = [
 ];
 /* Chips are not a counted product and never can be. The shop says "take two
    bags", one big bag becomes five to seven little ones depending on who is
-   bagging, and whatever comes back is crushed and gets thrown out. So there is
-   no opening count worth having and no closing count at all.
+   bagging, and nobody counts what comes back. So there is no opening count
+   worth having and no closing count at all.
 
    What there is, is money: $6 a bag, landing in the same till. Left
    unattributed it would inflate every tamale's money-per-pack - on a good day
@@ -1685,7 +1685,7 @@ function scr_closeout(){
         <div class="field">
           <label class="lbl" for="chips">Bags of chips sold${S.chipsSold===""?` &middot; <span class="needed">needed</span>`:""}</label>
           <input id="chips" type="number" inputmode="numeric" placeholder="0" value="${esc(S.chipsSold)}" data-set="chipsSold">
-          <p class="note" style="margin:0;font-size:12.5px">$${CHIPS.price} each. A count is fine &mdash; leftovers get thrown out anyway, so nothing comes back.</p>
+          <p class="note" style="margin:0;font-size:12.5px">$${CHIPS.price} each. A rough count is fine.</p>
         </div>
 
         <button class="btn btn-quiet btn-sm" data-act="addpay" style="width:auto">Someone paid another way</button>
