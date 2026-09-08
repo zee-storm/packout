@@ -750,6 +750,7 @@ function vanCostFor(mid){
 const SHOP = {
   sellHrs: 4,          // he says 99% of them are four hours - this one is real
   eveningHours: "4:00 - 8:00",   // seasonal, and only on the markets marked evening
+  setupBefore: 1,                // "be there an hour before" - per market where known
   fee: null,           // $45-$95 depending on the market, nobody has said which
   driveMin: 45,        // "avg 45, sometimes more or less"
   feeLow: 45, feeHigh: 95
@@ -787,7 +788,8 @@ const MARKETS = [
   { id:"walnutcreekkaiser-wed", name:"Walnut Creek Kaiser", day:"Wed", crew:["habid"], vehicle:null },
   { id:"paloalto-wed", name:"Palo Alto", day:"Wed", crew:[], vehicle:null },
   { id:"santarosa-wed", name:"Santa Rosa", day:"Wed", crew:[], vehicle:null },
-  { id:"sanleandro-wed", name:"San Leandro", day:"Wed", crew:["bahir"], vehicle:null, evening:true },
+  { id:"sanleandro-wed", name:"San Leandro", day:"Wed", crew:["bahir"], vehicle:null,
+    evening:true, hours:"3:00 - 7:00", setupBefore:1.5 },
   { id:"sanrafael-thu", name:"San Rafael", day:"Thu", crew:[], vehicle:null },
   { id:"richmondkaiser-thu", name:"Richmond Kaiser", day:"Thu", crew:[], vehicle:null },
   { id:"losaltos-thu", name:"Los Altos", day:"Thu", crew:[], vehicle:null },
@@ -903,6 +905,11 @@ const rnd = mulberry32(20260828);
 /* ---- dates ---- */
 const TODAY = new Date(); TODAY.setHours(0,0,0,0);
 const dISO = d => d.toISOString().slice(0,10);
+/* The seller's own calendar day, not UTC. An evening market runs past 5pm
+   California time, which is already tomorrow in UTC - stamping the day with
+   toISOString would wipe a seller's counts halfway through the market. */
+const localDay = d => d.getFullYear() + "-" +
+  String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 const daysAgo = n => { const d=new Date(TODAY); d.setDate(d.getDate()-n); return d; };
 const fmtDate = d => d.toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"});
 const fmtShort = d => d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
@@ -1092,13 +1099,14 @@ const BLANK = {
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
   travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
-  packedBy:"you", showPacker:false, me:null
+  packedBy:"you", showPacker:false, me:null, dayOf:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
 loadNote();
 
 function save(){
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
+  try{ S.dayOf = S.dayOf || localDay(new Date());
+       localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
   catch(e){
     // Almost always the photo pushing past the storage limit.
     // The counts are the paycheck; the photo is not. Drop it and keep the numbers.
@@ -1140,6 +1148,20 @@ function load(){
     merged.travel = Object.assign({mode:"van",legs:0,passenger:"",marketId:"",gasMode:"claim",gasAmount:""}, merged.travel || {});
     delete merged.drive;
     if(!SELLER_SCREEN_NAMES.includes(merged.screen)) merged.screen = "today";
+
+    /* A saved day belongs to the date it was started on. Without this, a
+       seller who taps around the evening before opens the market itself
+       half-way through the flow, holding yesterday's counts against today's
+       cooler. Who they are is the one thing that carries over - they should
+       not have to say their name again every morning. */
+    const today = localDay(new Date());
+    if(merged.dayOf && merged.dayOf !== today){
+      const fresh = JSON.parse(JSON.stringify(BLANK));
+      fresh.me = merged.me;
+      fresh.dayOf = today;
+      return fresh;
+    }
+    merged.dayOf = merged.dayOf || today;
     return merged;
   }catch(e){ return null; }
 }
@@ -1361,7 +1383,7 @@ function scr_today(){
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
       ${me() ? `<button class="btn btn-quiet btn-sm" data-act="switch-me" style="margin-top:8px">${esc(me().name)} &middot; not you?</button>` : ""}
-      <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}</p>
+      <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.hours ? esc(MY_MARKET.hours) : MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}</p>
       <p class="note" style="margin-top:3px">${esc(TODAY_WX.t)}, ${TODAY_WX.temp}&deg; today</p>
     </div>
 
@@ -1392,7 +1414,7 @@ function scr_today(){
       <div class="spread">
         <div>
           <div class="lbl">Load-in</div>
-          <div class="mid" style="margin-top:5px">An hour early</div>
+          <div class="mid" style="margin-top:5px">${MY_MARKET.setupBefore===1.5?"90 min early":`${MY_MARKET.setupBefore||SHOP.setupBefore} hr early`}</div>
         </div>
         <div style="text-align:right">
           <div class="lbl">Anything wrong</div>
@@ -1527,7 +1549,7 @@ function scr_market(){
          </label>`}
 
     <div class="hint">
-      Get there <b>an hour before it opens</b>.
+      Get there <b>${MY_MARKET.setupBefore===1.5?"an hour and a half":"an hour"} before it opens</b>.
       The photo shows the shop the booth was actually up and ready, not just that you got there.
     </div>
 
@@ -1607,7 +1629,7 @@ function scr_closeout(){
     <div>
       <div class="lbl">Step 3 of 3</div>
       <h1 class="page" style="margin-top:6px">Count what's left</h1>
-      <p class="note" style="margin-top:5px">Count the cooler before you drive off, not after.</p>
+      <p class="note" style="margin-top:5px">Do this wherever you normally count &mdash; at the booth or back at the shop.</p>
     </div>
     ${rows}
 
@@ -1897,9 +1919,9 @@ function scr_result(){
     </div>
 
     ${tooHigh
-      ? `<div class="hint"><b>There is more money here than the count explains.</b> ${money2(Math.abs(given))} more, which usually means a flavour got counted wrong or more chips went out than were logged. Worth a look before you drive off.</div>`
+      ? `<div class="hint"><b>There is more money here than the count explains.</b> ${money2(Math.abs(given))} more, which usually means a flavour got counted wrong or more chips went out than were logged. Worth a second look.</div>`
       : tooLow
-      ? `<div class="hint"><b>That does not look right.</b> ${money2(perPack)} a pack is far below what these go for, so it is probably a miscount or money still in a pocket rather than deals. Worth a look before you drive off.</div>`
+      ? `<div class="hint"><b>That does not look right.</b> ${money2(perPack)} a pack is far below what these go for, so it is probably a miscount or money still in a pocket rather than deals. Worth a second look.</div>`
       : given > 5
         ? `<div class="hint"><b>${money2(given)} went out without money.</b> Free ones, deals you made, anything traded${(disc>0 && disc<=given+1)?` \u2014 you noted ${money2(disc)} of it`:""}. Nothing to fix; it just shows what the day cost to sell.</div>`
         : ""}
@@ -2030,7 +2052,7 @@ function owner_market(mid){
 
     <div>
       <h1 class="page">${esc(m.name)}</h1>
-      <p class="note" style="margin-top:5px">${esc(DAY_FULL[m.day])}s &middot; ${m.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`} &middot; stall fee ${money(feeOf(m))}${feeKnown(m)?"":GUESS}</p>
+      <p class="note" style="margin-top:5px">${esc(DAY_FULL[m.day])}s &middot; ${m.hours ? esc(m.hours) : m.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`} &middot; stall fee ${money(feeOf(m))}${feeKnown(m)?"":GUESS}</p>
     </div>
 
     ${d ? `<div class="card stripe stripe-${d.status==="Closed"?"good":"live"}">
