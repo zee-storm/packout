@@ -1366,13 +1366,13 @@ function scr_today(){
     </div>
 
     <div class="card stripe stripe-live">
-      <div class="card-hd"><h3>Take ${r.total} packs</h3><span class="pill pill-live"><span class="dot"></span>Ready</span></div>
+      <div class="card-hd"><h3>Take ${r.total} items</h3><span class="pill pill-live"><span class="dot"></span>Ready</span></div>
       ${rows}
     </div>
 
     ${MY_REC.wx < 0.97 ? `<div class="card card-pad stripe stripe-warn">
       <div class="spread"><div class="lbl">${esc(MY_REC.fc.t)} expected</div>
-        <span class="pill pill-warn">${MY_REC.total - MY_REC.plain} packs</span></div>
+        <span class="pill pill-warn">${MY_REC.total - MY_REC.plain} items</span></div>
       <p class="note" style="margin-top:7px">${esc(MY_REC.fc.t)} and ${MY_REC.fc.temp}&deg; at this market today, so you're taking
         ${MY_REC.plain - MY_REC.total} fewer than a normal day. Better than hauling them back cold.</p>
     </div>` : ""}
@@ -1882,7 +1882,7 @@ function scr_result(){
       <div class="card-hd"><h3>Money per pack</h3><span class="pill pill-${vClass}">${esc(vLabel)}</span></div>
       <div class="card-pad">
         <div class="big">${money2(perPack)}</div>
-        <p class="note" style="margin-top:8px">out of ${money2(fullPack)} at full price, across ${sold} packs</p>
+        <p class="note" style="margin-top:8px">out of ${money2(fullPack)} at full price, across ${sold} items</p>
       </div>
       <div class="card-pad" style="padding-top:0">
         <div class="kv"><span class="kv-k">Cash taken</span><span class="kv-v">${money2(cash)}</span></div>
@@ -2057,7 +2057,7 @@ function owner_market(mid){
     </div>
 
     <div class="card">
-      <div class="card-hd"><h3>Send here this week</h3><span class="pill pill-live">${rec.total} packs</span></div>
+      <div class="card-hd"><h3>Send here this week</h3><span class="pill pill-live">${rec.total} items</span></div>
       ${PRODUCTS.map(p=>`<div class="step-row">
         <div class="grow"><div class="step-name">${esc(p.name)}</div></div>
         <div class="mid">${rec.byProduct[p.id].qty}</div>
@@ -2225,7 +2225,7 @@ function owner_send(){
     </div>
 
     <div class="card">
-      <div class="card-hd"><h3>Make this week</h3><span class="pill pill-live">${makeTotal} packs</span></div>
+      <div class="card-hd"><h3>Make this week</h3><span class="pill pill-live">${makeTotal} items</span></div>
       <div class="card-pad">
         ${PRODUCTS.map(p=>`<div class="kv">
           <span class="kv-k">${esc(p.name)} <span class="sub">\u2014 need ${totals[p.id]}, freezer has ${FREEZER[p.id]}</span></span>
