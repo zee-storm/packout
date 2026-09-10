@@ -716,6 +716,23 @@ const prod = id => PRODUCTS.find(p=>p.id===id);
    Paying on list value instead would overpay whoever discounts hardest and
    underpay whoever sells chips well, which is backwards on both counts. */
 const COMMISSION = 0.20;
+
+/* What one person earns for a day. Placeholder until the real figures are in
+   - "most is like 160" but Nawid raises and lowers it per person, so a single
+   shop-wide number would quietly pay several people the wrong amount. */
+const BASE_PAY_DEFAULT = 160;
+const basePayFor = sid => {
+  const s = slr(sid);
+  return (s && typeof s.basePay === "number") ? s.basePay : BASE_PAY_DEFAULT;
+};
+// The floor and the commission do not stack: whichever is more.
+function dayPay(sid, took){
+  const commission = took * COMMISSION;
+  const base = basePayFor(sid);
+  return commission >= base
+    ? { amount: commission, kind: "commission", commission, base }
+    : { amount: base,       kind: "base",       commission, base };
+}
 const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
 const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
 
@@ -1366,7 +1383,7 @@ function dayFromCloud(row, m){
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
     overSend: 0, fixes: 0,
-    owed: gross * COMMISSION,
+    owed: dayPay(row.seller_id, gross).amount,
     reported: true
   };
 }
@@ -1557,7 +1574,7 @@ function dayStats(d){
   const yieldPer = sold>0 ? money_in/sold : 0;
   const fullPer  = sold>0 ? revenue/sold  : 0;
   return { sold, revenue, money_in, yieldPer, fullPer, given:revenue-money_in,
-           hrs, perHr:(revenue-feeOf(m))/hrs, commission:money_in*COMMISSION, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
+           hrs, perHr:(revenue-feeOf(m))/hrs, commission:dayPay(d.sellerId, money_in).amount, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
 }
 
 function toast(msg){
@@ -2142,7 +2159,8 @@ function scr_result(){
   const drivePay = driverPay();
   const inHand = moneyIn();
   const dayTook = inHand + fromTill;             // everything the day sold
-  const commission = dayTook * COMMISSION;
+  const pay = dayPay(S.me, dayTook);
+  const commission = pay.amount;
   const carGas = carAllowance();
   const owed = commission + drivePay + fromOwn + carGas;
   const returning = P_IDS.reduce((a,p)=>a+(S.closing[p]||0),0);
@@ -2182,7 +2200,10 @@ function scr_result(){
         <p class="note" style="margin-top:8px">${sold} items sold at ${esc(MY_MARKET.name)}</p>
       </div>
       <div class="card-pad" style="padding-top:0">
-        <div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(COMMISSION*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(commission)}</span></div>
+        ${pay.kind === "commission"
+          ? `<div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(COMMISSION*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(pay.commission)}</span></div>`
+          : `<div class="kv"><span class="kv-k">Your day rate</span><span class="kv-v">${money2(pay.base)}</span></div>
+             <div class="kv"><span class="kv-k" style="color:var(--muted)">${Math.round(COMMISSION*100)}% would have been ${money2(pay.commission)}</span><span class="kv-v" style="color:var(--muted)">&mdash;</span></div>`}
         ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?" both ways":" one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
         ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
         ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
@@ -2281,7 +2302,7 @@ function liveDay(plan){
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: S.corrections.length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
-             owed: closed ? ((moneyIn()+expTotal("till"))*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
+             owed: closed ? (dayPay(S.me, moneyIn()+expTotal("till")).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
 
@@ -2322,7 +2343,7 @@ function liveDay(plan){
            status: done ? "Closed" : "Set up "+setupAt,
            live: !done, perPack: done ? rev/sold : null, fullPer: listPer,
            overSend: out - sendList, fixes:0,
-           owed: done ? rev*COMMISSION : 0 };
+           owed: done ? dayPay(plan.sellerId, rev).amount : 0 };
 }
 
 function owner_market(mid){
@@ -2951,6 +2972,45 @@ document.addEventListener("click", e => {
     S.showFix = false; buzz(20); toast("Sent to the shop"); render(); return;
   }
   if(act==="reset"){ reset(); window.scrollTo(0,0); return; }
+});
+
+/* Keep every keystroke.
+
+   The app used to record a field only when you tapped away from it. Type a
+   number, tap the button, and it was gone - which is exactly what happened
+   to a seller who told us he had written down $50 of giveaway and then had
+   to conclude he must have "messed up something else". He had not. The app
+   ate it.
+
+   So a value is stored as it is typed. Redrawing still waits for the field
+   to be left, because replacing the box mid-word would throw the keyboard
+   and the cursor away. */
+document.addEventListener("input", e => {
+  const el = e.target;
+  if(!el || el.id === "photoIn") return;
+
+  if(el.dataset.pay !== undefined){
+    const row = S.otherPays[Number(el.dataset.pay)];
+    if(row) row[el.dataset.f] = el.value;
+    save(); return;
+  }
+  if(el.dataset.exp !== undefined){
+    const row = S.expenses[Number(el.dataset.exp)];
+    if(row) row[el.dataset.f] = el.value;
+    save(); return;
+  }
+
+  const key = el.dataset.set;
+  if(!key || key === "ownerNote") return;
+  if(key === "opening" || key === "closing"){
+    const v = el.value;
+    S[key][el.dataset.p] = v === "" ? undefined : Math.max(0, Math.round(Number(v) || 0));
+  } else if(key === "passenger" || key === "passengerMarket" || key === "gasAmount"){
+    return;                       // these are selects; change is enough
+  } else {
+    S[key] = el.value;
+  }
+  save();
 });
 
 document.addEventListener("change", e => {
