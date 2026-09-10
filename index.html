@@ -616,6 +616,9 @@ th.n{text-align:right}
   0%,22%{box-shadow:0 0 0 3px var(--accent),0 0 26px -4px var(--accent);border-color:var(--accent)}
   100%{box-shadow:0 0 0 3px transparent,0 0 0 transparent}
 }
+.row-bad{background:var(--bad-soft)}
+.bad-note{color:var(--bad);letter-spacing:.02em;text-transform:none;font-size:11px}
+.row-bad .stepper input{border-color:var(--bad)}
 .needed{
   font-family:var(--f-num);font-size:9px;font-weight:500;letter-spacing:.14em;
   text-transform:uppercase;color:var(--warn);
@@ -657,6 +660,7 @@ th.n{text-align:right}
 const PRODUCTS = [
   { id:"chilicorn",  name:"Cheese Chili Corn",   short:"Chili corn",  price:15, caseSize:1, kind:"tamale", diet:"veg" },
   { id:"cheddar",    name:"Smoked Cheddar",      short:"Cheddar",     price:15, caseSize:1, kind:"tamale", diet:"veg" },
+  // The shop's paper sheets call this one "4 cheese". Same tamale.
   { id:"beancheese", name:"Bean and Cheese",     short:"Bean & cheese", price:15, caseSize:1, kind:"tamale", diet:"veg" },
   { id:"goat",       name:"Goat Cheese",         short:"Goat cheese", price:15, caseSize:1, kind:"tamale", diet:"veg" },
   { id:"veggie",     name:"Summer Veggie",       short:"Summer veggie", price:15, caseSize:1, kind:"tamale", diet:"vegan" },
@@ -666,6 +670,7 @@ const PRODUCTS = [
   { id:"pumpkin",    name:"Pumpkin",             short:"Pumpkin",     price:15, caseSize:1, kind:"tamale", diet:"vegan" },
   { id:"beans",      name:"Red and Black Beans", short:"Red & black", price:15, caseSize:1, kind:"tamale", diet:"vegan" },
   { id:"breakfast",  name:"Breakfast",           short:"Breakfast",   price:15, caseSize:1, kind:"tamale", diet:"veg" },
+  { id:"eggplant",   name:"Eggplant",            short:"Eggplant",    price:15, caseSize:1, kind:"tamale", diet:"vegan" },
 
   /* Salsas ride along in the same list so they get counted, priced and paid
      out exactly like everything else. The kind is what keeps them out of the
@@ -1074,6 +1079,13 @@ const OLDEST = TAMALE_IDS.slice().sort((a,b) => BATCH_AGE[b].trips - BATCH_AGE[a
    Live state (the seller's own day) \u2014 persisted
    ========================================================= */
 
+const AUTH_KEY = "packout.auth.v1";
+let AUTH = (() => {
+  try { return JSON.parse(localStorage.getItem(AUTH_KEY)) || {}; }
+  catch(e){ return {}; }
+})();
+function saveAuth(){ try{ localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH)); }catch(e){} }
+
 const STORE_KEY = "packout.v2";
 const NOTE_KEY  = "packout.note.v1";
 const DEFAULT_NOTE = "Push the oldest batch first today and lead with it when people walk up. Everything else stays full price.";
@@ -1094,12 +1106,13 @@ const BLANK = {
   endedAt:null,
   cashCounted:"", cardTotal:"", otherPays:[], chipsSold:"", float:150,
   soldOut:null, soldOutAt:"", note:"", lead:"",
-  showDamaged:false, showLead:false, showSamples:false, showCounts:false,
+  showDamaged:false, showLead:false, showCounts:false,
   submittedAt:null, showFix:false, corrections:[], marketOpen:null,
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
   travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
-  packedBy:"you", showPacker:false, me:null, dayOf:null
+  packedBy:"you", showPacker:false, me:null, dayOf:null, sentAt:null, sendError:null,
+  codeTyped:"", codeError:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
 loadNote();
@@ -1167,8 +1180,234 @@ function load(){
 }
 function reset(){ S = JSON.parse(JSON.stringify(BLANK)); save(); render(); }
 
+if(AUTH.person && !S.me){ S.me = AUTH.person; }
 let MY_MARKET = marketOrAny();
 let MY_REC = recommendMarket(MY_MARKET.id);
+
+/* =========================================================
+   Sending the day to the shop
+
+   A submitted day is pushed once and never changed - the database
+   refuses updates and deletes outright, so a correction has to be a new
+   record. That is the locked-day rule, enforced below the app rather
+   than trusted to it.
+
+   Markets have bad reception, so nothing here is allowed to block. If
+   the send fails the day stays on the phone marked unsent and goes
+   again next time the app opens with signal. The seller is told which
+   state they are in and never has to think about it beyond that.
+   ========================================================= */
+
+const CLOUD = {
+  url: "https://xpftvyocjyktudswhqqm.supabase.co",
+  // Public by design: it ships inside this page. It can only do what the
+  // database's own rules allow, which is add a day and read days back.
+  key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhwZnR2eW9janlrdHVkc3docXFtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5ODc5MzYsImV4cCI6MjEwNDU2MzkzNn0.jraEgDG0EF8_HCi9sPVuQL5fy9GKznzVd-Gq0xO5gpk",
+  // Filled in when a code is redeemed. No default: a phone with no code
+  // belongs to no business and should be able to reach nothing.
+  get business(){ return AUTH.business || null; }
+};
+
+/* Who this phone is.
+
+   Kept apart from the day, in its own key, because the day is wiped every
+   morning and an identity must not be. A phone signs in once, anonymously -
+   no email, no password, nothing to type at 6am - and that identity means
+   nothing until a one-time code attaches it to a person at a business.
+
+   Every read and write below carries this session, and the database decides
+   what it may see. A phone with no code sees nothing at all, which is the
+   answer to "so not anybody can access my name". */
+
+async function ensureSession(){
+  if(AUTH.demo) return null;
+  const now = Date.now();
+  if(AUTH.token && AUTH.expires && now < AUTH.expires - 60000) return AUTH.token;
+
+  // Expired but refreshable - a seller should never be logged out mid-market.
+  if(AUTH.refresh){
+    try{
+      const r = await fetch(CLOUD.url + "/auth/v1/token?grant_type=refresh_token", {
+        method:"POST",
+        headers:{ "apikey": CLOUD.key, "Content-Type":"application/json" },
+        body: JSON.stringify({ refresh_token: AUTH.refresh })
+      });
+      if(r.ok){
+        const d = await r.json();
+        AUTH.token = d.access_token; AUTH.refresh = d.refresh_token;
+        AUTH.expires = Date.now() + (d.expires_in || 3600) * 1000;
+        saveAuth(); return AUTH.token;
+      }
+    }catch(e){ /* fall through to a new anonymous identity */ }
+  }
+
+  try{
+    const r = await fetch(CLOUD.url + "/auth/v1/signup", {
+      method:"POST",
+      headers:{ "apikey": CLOUD.key, "Content-Type":"application/json" },
+      body: "{}"
+    });
+    if(!r.ok) return null;
+    const d = await r.json();
+    AUTH.token = d.access_token; AUTH.refresh = d.refresh_token;
+    AUTH.expires = Date.now() + (d.expires_in || 3600) * 1000;
+    saveAuth(); return AUTH.token;
+  }catch(e){ return null; }
+}
+
+function cloudHeaders(extra){
+  return Object.assign({
+    "apikey": CLOUD.key,
+    "Authorization": "Bearer " + (AUTH.token || CLOUD.key),
+    "Content-Type": "application/json"
+  }, extra || {});
+}
+
+// Turning a code into a person. The database checks it; the app only asks.
+async function redeemCode(code){
+  const tok = await ensureSession();
+  if(!tok) return { ok:false, msg:"No signal. Try again in a moment." };
+  try{
+    const r = await fetch(CLOUD.url + "/rest/v1/rpc/redeem_code", {
+      method:"POST", headers: cloudHeaders(), body: JSON.stringify({ p_code: code })
+    });
+    const d = await r.json();
+    if(!r.ok) return { ok:false, msg: (d && d.message) || "That code did not work." };
+    const row = Array.isArray(d) ? d[0] : d;
+    if(!row) return { ok:false, msg:"That code did not work." };
+    AUTH.business = row.out_business_id;
+    AUTH.person   = row.out_person_id;
+    AUTH.name     = row.out_person_name;
+    AUTH.role     = row.out_role;
+    saveAuth();
+    return { ok:true };
+  }catch(e){
+    return { ok:false, msg:"No signal. Try again in a moment." };
+  }
+}
+
+// What one finished day looks like on the wire - the paper, as data.
+function dayPayload(){
+  const m = MY_MARKET, who = me();
+  return {
+    business_id: CLOUD.business,
+    market_id: m.id,
+    market_name: m.name,
+    day_date: S.dayOf || localDay(new Date()),
+    seller_id: S.me || null,
+    seller_name: who ? who.name : null,
+    packed_by: packedByName(),
+    cash: Number(S.cashCounted) || 0,
+    card: Number(S.cardTotal) || 0,
+    other_pays: (S.otherPays || []).filter(o => Number(o.amount)),
+    chips_sold: chipsSold(),
+    spent_from_till: expTotal("till"),
+    discounts: Number(S.discounts) || 0,
+    note: S.note || null
+  };
+}
+
+function countRows(dayId){
+  return WENT_OUT().map(pid => ({
+    business_id: CLOUD.business,
+    market_day_id: dayId,
+    product_id: pid,
+    product_name: prod(pid).name,
+    went_out: S.opening[pid] || 0,
+    came_back: Number(S.closing[pid]) || 0,
+    samples: S.samples[pid] || 0,
+    damaged: S.damaged[pid] || 0
+  }));
+}
+
+/* Days that have actually arrived, keyed by market. Null until fetched.
+
+   Once a market day can be real, inventing one is worse than showing
+   nothing: the owner cannot tell a made-up number from a reported one,
+   and would trust both. So Today shows only what was really sent, and
+   says plainly when a market has not reported yet. */
+let REAL_DAYS = null;
+
+async function loadRealDays(){
+  if(AUTH.demo || !AUTH.business){ REAL_DAYS = REAL_DAYS || {}; return false; }
+  try{
+    await ensureSession();
+    const today = localDay(new Date());
+    const res = await fetch(CLOUD.url + "/rest/v1/market_days"
+      + "?business_id=eq." + CLOUD.business
+      + "&day_date=eq." + today
+      + "&select=*,day_counts(product_id,went_out,came_back,samples,damaged)",
+      { headers: cloudHeaders() });
+    if(!res.ok) throw new Error(String(res.status));
+    const rows = await res.json();
+    REAL_DAYS = {};
+    rows.forEach(r => REAL_DAYS[r.market_id] = r);
+    return true;
+  }catch(e){
+    REAL_DAYS = REAL_DAYS || {};      // an empty answer, not a broken screen
+    return false;
+  }
+}
+
+// What one reported day looks like to the owner's screen.
+function dayFromCloud(row, m){
+  const counts = row.day_counts || [];
+  const sold = counts.reduce((a,c)=>
+    a + Math.max(0, c.went_out - c.came_back - c.samples - c.damaged), 0);
+  const out  = counts.reduce((a,c)=>a + c.went_out, 0);
+  const gross = Number(row.cash) + Number(row.card)
+    + (row.other_pays||[]).reduce((a,o)=>a+(Number(o.amount)||0),0)
+    + Number(row.spent_from_till);
+  const packMoney = gross - (row.chips_sold * CHIPS.price);
+  const listPer = PRODUCTS.reduce((a,p)=>a+p.price,0)/PRODUCTS.length;
+  return {
+    name: row.seller_name || "Nobody assigned",
+    phone: null, sold, rev: Math.round(packMoney), out,
+    status: "Closed", live: false,
+    perPack: sold ? packMoney/sold : null, fullPer: listPer,
+    overSend: 0, fixes: 0,
+    owed: gross * COMMISSION,
+    reported: true
+  };
+}
+
+async function sendDay(){
+  if(S.sentAt) return "already";
+  if(AUTH.demo || !AUTH.business) return "local";
+  try{
+    await ensureSession();
+    const res = await fetch(CLOUD.url + "/rest/v1/market_days", {
+      method: "POST",
+      headers: cloudHeaders({ "Prefer": "return=representation" }),
+      body: JSON.stringify(dayPayload())
+    });
+    if(res.status === 409){
+      // Same market, same date, already in. Nothing to do and nothing wrong.
+      S.sentAt = S.sentAt || new Date().toISOString();
+      S.sendError = null;
+      save();
+      return "sent";
+    }
+    if(!res.ok) throw new Error("day " + res.status);
+    const day = (await res.json())[0];
+
+    const rows = countRows(day.id);
+    if(rows.length){
+      const r2 = await fetch(CLOUD.url + "/rest/v1/day_counts", {
+        method: "POST", headers: cloudHeaders(), body: JSON.stringify(rows)
+      });
+      if(!r2.ok) throw new Error("counts " + r2.status);
+    }
+    S.sentAt = new Date().toISOString();
+    S.sendError = null;
+    save();
+    return "sent";
+  }catch(e){
+    S.sendError = String(e.message || e);
+    save();
+    return "failed";
+  }
+}
 
 /* =========================================================
    Helpers
@@ -1187,6 +1426,29 @@ function moneyIn(){
   return (Number(S.cashCounted)||0) + (Number(S.cardTotal)||0)
        + (S.otherPays||[]).reduce((a,o)=>a+(Number(o.amount)||0), 0);
 }
+
+/* A count that cannot be true, caught while the cooler is still open.
+
+   soldByCount clamps at zero, so a typo - 51 back instead of 15 - quietly
+   records nothing sold and says nothing. The seller finds out at the very end,
+   when the money does not add up, and by then the cooler is packed away and
+   they are re-counting from memory. Both businesses named exactly that as the
+   worst part of the day.
+
+   Only impossible things are flagged. Nothing here guesses at what a normal
+   number looks like - there is no real history to judge that against yet, and
+   a wrong guess would train people to ignore the warning. */
+function countProblem(pid){
+  const op = S.opening[pid] ?? 0;
+  const cl = S.closing[pid];
+  if(cl === undefined || cl === null || cl === "") return null;
+  const back = Number(cl) || 0;
+  const extra = (S.samples[pid]||0) + (S.damaged[pid]||0);
+  if(back > op) return `${back} back, but only ${op} went out`;
+  if(back + extra > op) return `${back} back plus ${extra} sampled or damaged is more than the ${op} that went out`;
+  return null;
+}
+function anyCountProblem(){ return WENT_OUT().some(p => countProblem(p)); }
 
 function soldByCount(pid){
   const op = S.opening[pid] ?? 0, cl = S.closing[pid] ?? 0;
@@ -1332,19 +1594,29 @@ async function keepAwake(on){
    ========================================================= */
 
 function scr_whoami(){
+  const err = S.codeError;
   return `<div class="pad stack">
     <div>
-      <div class="lbl">Before you start</div>
-      <h1 class="page" style="margin-top:6px">Who's got this phone?</h1>
-      <p class="note" style="margin-top:5px">Tap your name. It only asks once &mdash; after this it opens straight to your market.</p>
+      <div class="lbl">First time on this phone</div>
+      <h1 class="page" style="margin-top:6px">Enter your code</h1>
+      <p class="note" style="margin-top:5px">Nawid gives you a 6-digit code. You type it once, on your own phone, and never again.</p>
     </div>
-    <div class="card">
-      ${SELLERS.map(s=>`<button class="step-row" data-me="${s.id}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--glass-line-2);cursor:pointer;text-align:left">
-        <div class="grow"><div class="step-name">${esc(s.name)}</div></div>
-        <div class="mid" style="font-size:18px;color:var(--muted)">&rsaquo;</div>
-      </button>`).join("")}
+    <div class="card card-pad stack-sm">
+      <div class="field">
+        <label class="lbl" for="codebox">Your code</label>
+        <input id="codebox" type="text" inputmode="text" autocapitalize="characters"
+               autocomplete="off" placeholder="ABC123" maxlength="12"
+               style="font-size:24px;letter-spacing:.18em;text-align:center;font-weight:600"
+               value="${esc(S.codeTyped||"")}" data-set="codeTyped">
+      </div>
+      ${err ? `<div class="hint" style="color:var(--bad)">${esc(err)}</div>` : ""}
+      <button class="btn" data-act="redeem">Use this code</button>
     </div>
-    <div class="hint">Wrong name? Tap the market name on the next screen to change it.</div>
+    <div class="hint">
+      No password, and nothing to remember. The code stops working after you
+      use it, so passing it on gets nobody anything.
+    </div>
+    <button class="btn btn-quiet" data-act="demo">Just having a look</button>
   </div>`;
 }
 
@@ -1362,6 +1634,22 @@ function scr_dayoff(){
       ${next.map(x=>`<div class="step-row"><div class="grow"><div class="step-name">${esc(x)}</div></div></div>`).join("")}
     </div>` : `<div class="hint">Nobody has you down for a market yet. Check with Nawid.</div>`}
     <button class="btn btn-quiet" data-act="switch-me">Not ${esc(me()?me().name:"you")}?</button>
+  </div>`;
+}
+
+function scr_pickdemo(){
+  return `<div class="pad stack">
+    <div>
+      <div class="lbl">Having a look</div>
+      <h1 class="page" style="margin-top:6px">Pick a seller</h1>
+      <p class="note" style="margin-top:5px">Nothing here leaves this phone. On a real phone you would have typed a code and this screen would not exist.</p>
+    </div>
+    <div class="card">
+      ${SELLERS.map(s=>`<button class="step-row" data-me="${s.id}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--glass-line-2);cursor:pointer;text-align:left">
+        <div class="grow"><div class="step-name">${esc(s.name)}</div></div>
+        <div class="mid" style="font-size:18px;color:var(--muted)">&rsaquo;</div>
+      </button>`).join("")}
+    </div>
   </div>`;
 }
 
@@ -1583,10 +1871,13 @@ function scr_closeout(){
   const countRow = p => {
     const v = S.closing[p.id];
     const shown = (v===undefined || v===null) ? "" : v;
-    return `<div class="step-row">
+    const bad = countProblem(p.id);
+    return `<div class="step-row${bad?" row-bad":""}">
       <div class="grow">
         <div class="step-name">${esc(p.short)}</div>
-        <div class="step-sub">took ${S.opening[p.id]||0} out</div>
+        ${bad
+          ? `<div class="step-sub bad-note">${esc(bad)}</div>`
+          : `<div class="step-sub">took ${S.opening[p.id]||0} out</div>`}
       </div>
       <div class="stepper">
         <button data-adj="closing" data-p="${p.id}" data-d="-1" aria-label="Less ${esc(p.short)}">&ndash;</button>
@@ -1635,15 +1926,9 @@ function scr_closeout(){
 
     <div class="card">
       <div class="card-hd"><h3>Samples given out</h3><span class="pill">comes out of the cooler</span></div>
-      <div class="card-pad stack-sm">
-        <div class="seg">
-          <button data-samp="no"  aria-pressed="${!S.showSamples}">None today</button>
-          <button data-samp="yes" aria-pressed="${S.showSamples}">Gave some out</button>
-        </div>
-      </div>
-      ${S.showSamples ? sampleRows : ""}
+      ${sampleRows}
     </div>
-    ${S.showSamples ? `<div class="hint">Samples leave the cooler but bring in no money. Counting them here is what keeps you from looking short.</div>` : ""}
+    <div class="hint">Samples leave the cooler but bring in no money. Counting them here is what keeps you from looking short.</div>
 
     <div class="card card-pad stack-sm">
       <div class="spread"><div class="lbl">Did you sell out?</div>
@@ -1816,6 +2101,12 @@ function scr_closeout(){
 }
 function closeoutMissing(){
   const m = [];
+  /* Wrong before blank. A number that cannot be true needs fixing while the
+     cooler is still open and the row is still fresh in their head - being sent
+     to the next empty box first is how a typo survives to the end of the day. */
+  WENT_OUT().forEach(p=>{
+    if(countProblem(p)) m.push({ label:prod(p).short+" doesn't add up", sel:"[data-set='closing'][data-p='"+p+"']" });
+  });
   WENT_OUT().forEach(p=>{
     const v = S.closing[p];
     if(v===undefined || v===null || v==="")
@@ -1901,10 +2192,10 @@ function scr_result(){
     ${fromOwn ? `<div class="hint">The ${money2(fromOwn)} you fronted is on top of your commission &mdash; that's money back, not pay.</div>` : ""}
 
     <div class="card stripe stripe-${vClass}">
-      <div class="card-hd"><h3>Money per pack</h3><span class="pill pill-${vClass}">${esc(vLabel)}</span></div>
+      <div class="card-hd"><h3>The money you took</h3><span class="pill pill-${vClass}">${esc(vLabel)}</span></div>
       <div class="card-pad">
-        <div class="big">${money2(perPack)}</div>
-        <p class="note" style="margin-top:8px">out of ${money2(fullPack)} at full price, across ${sold} items</p>
+        <div class="big">${money2(gross)}</div>
+        <p class="note" style="margin-top:8px">across ${sold} items sold</p>
       </div>
       <div class="card-pad" style="padding-top:0">
         <div class="kv"><span class="kv-k">Cash taken</span><span class="kv-v">${money2(cash)}</span></div>
@@ -1912,32 +2203,32 @@ function scr_result(){
         ${(S.otherPays||[]).filter(o=>Number(o.amount)).map(o=>`<div class="kv"><span class="kv-k">${esc(o.how||"Other")}</span><span class="kv-v">${money2(Number(o.amount)||0)}</span></div>`).join("")}
         ${fromTill ? `<div class="kv"><span class="kv-k">Spent out of the till</span><span class="kv-v">${money2(fromTill)}</span></div>` : ""}
         <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(gross)}</span></div>
-        ${chipsSold() ? `<div class="kv"><span class="kv-k">Less ${chipsSold()} bags of chips</span><span class="kv-v">&minus;${money2(chipMoney())}</span></div>` : ""}
-        <div class="kv"><span class="kv-k">${sold} packs at full price</span><span class="kv-v">${money2(rev)}</span></div>
-        <div class="kv"><span class="kv-k">${given < 0 ? "More money than the count explains" : "Given away to make the sale"}</span><span class="kv-v">${money2(Math.abs(given))}</span></div>
       </div>
     </div>
 
     ${tooHigh
-      ? `<div class="hint"><b>There is more money here than the count explains.</b> ${money2(Math.abs(given))} more, which usually means a flavour got counted wrong or more chips went out than were logged. Worth a second look.</div>`
+      ? `<div class="hint"><b>There is more money here than the count explains.</b> About ${money2(Math.abs(given))} more, which usually means a flavour got counted wrong or more chips went out than were written down. Worth a second look.</div>`
       : tooLow
-      ? `<div class="hint"><b>That does not look right.</b> ${money2(perPack)} a pack is far below what these go for, so it is probably a miscount or money still in a pocket rather than deals. Worth a second look.</div>`
-      : given > 5
-        ? `<div class="hint"><b>${money2(given)} went out without money.</b> Free ones, deals you made, anything traded${(disc>0 && disc<=given+1)?` \u2014 you noted ${money2(disc)} of it`:""}. Nothing to fix; it just shows what the day cost to sell.</div>`
-        : ""}
+      ? `<div class="hint"><b>That does not look right.</b> The money is a long way below what ${sold} items normally bring in, so it is probably a miscount or cash still in a pocket. Worth a second look.</div>`
+      : ""}
 
     <div class="tiles">
       <div class="tile"><div class="lbl">Going back</div><div class="mid">${returning}</div><div class="tile-sub">to the freezer</div></div>
-      <div class="tile"><div class="lbl">${given < 0 ? "Unexplained" : "Given away"}</div><div class="mid">${money2(Math.abs(given))}</div><div class="tile-sub">${given < 0 ? "more than the count explains" : "free ones, deals, trades"}</div></div>
+      <div class="tile"><div class="lbl">Chips</div><div class="mid">${chipsSold()}</div><div class="tile-sub">bags sold</div></div>
       <div class="tile"><div class="lbl">Samples</div><div class="mid">${samples}</div><div class="tile-sub">${money2(sampleValue)} given</div></div>
       <div class="tile"><div class="lbl">Sell-through</div><div class="mid">${openedTotal()>0?Math.round(sold/openedTotal()*100):0}%</div><div class="tile-sub">of what you took</div></div>
     </div>
 
-    <div class="card card-pad stack-sm">
-      <div class="lbl">Sent to the shop</div>
-      <p class="note">Counts, money, weather, and your notes went up automatically. Nobody has to retype anything.</p>
+    <div class="card card-pad stack-sm stripe stripe-${S.sentAt ? "good" : "warn"}">
+      <div class="spread">
+        <div class="lbl">${S.sentAt ? "Sent to the shop" : "Waiting for signal"}</div>
+        ${S.sentAt ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
+      </div>
+      <p class="note">${S.sentAt
+        ? "Nawid has this day. The counts, the money and your notes went up on their own \u2014 nobody has to retype anything."
+        : "Saved on your phone. It goes on its own as soon as you have signal, even if you close the app. Nothing is lost."}</p>
       <div class="chips" style="margin-top:4px">
-        ${PRODUCTS.map(p=>`<span class="chip">${esc(p.short)} ${soldByCount(p.id)} sold \u00B7 ${S.closing[p.id]||0} back</span>`).join("")}
+        ${WENT_OUT().map(pid=>`<span class="chip">${esc(prod(pid).short)} ${soldByCount(pid)} sold \u00B7 ${S.closing[pid]||0} back</span>`).join("")}
       </div>
     </div>
 
@@ -1975,6 +2266,9 @@ function scr_result(){
    ========================================================= */
 
 function liveDay(plan){
+  const reported = REAL_DAYS && REAL_DAYS[plan.marketId];
+  if(reported) return dayFromCloud(reported, mkt(plan.marketId));
+
   // fabricate a plausible in-progress or finished day for the owner view
   if(plan.sellerId==="you"){
     const closed = S.screen==="result";
@@ -1990,6 +2284,19 @@ function liveDay(plan){
              owed: closed ? ((moneyIn()+expTotal("till"))*COMMISSION + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
+
+  const real = REAL_DAYS && REAL_DAYS[plan.marketId];
+  if(real) return dayFromCloud(real, m);
+  if(REAL_DAYS){
+    // We have looked, and this market has not sent anything in. Say that,
+    // rather than dressing a guess up as a closed day.
+    return { name: s ? s.name : "Nobody assigned", phone:null, sold:null, rev:null,
+             out: recommendMarket(plan.marketId).total,
+             status: s ? "Not reported yet" : "No name yet",
+             live:false, perPack:null, fullPer:null, overSend:0, fixes:0, owed:0,
+             unassigned: !s };
+  }
+
   if(!s){
     // Nobody written down for this slot. It still runs - the owner needs to
     // see the gap rather than have the market quietly vanish off Today.
@@ -2135,7 +2442,7 @@ function owner_today(){
           <div class="sub" style="margin-top:3px">
             ${d.phone
               ? `<a href="sms:${esc(d.phone.replace(/[^0-9+]/g,""))}" style="color:var(--accent);text-decoration:none;font-weight:600">${esc(d.name)}</a>`
-              : esc(d.name)} \u00B7 ${esc(m.hours)} \u00B7 <span style="color:var(--accent)">open</span>
+              : esc(d.name)} \u00B7 ${esc(m.hours || (m.evening ? SHOP.eveningHours : DAY_FULL[m.day]))} \u00B7 <span style="color:var(--accent)">open</span>
           </div></div>
         ${pill}
       </div>
@@ -2468,8 +2775,10 @@ function render(){
   } else {
     app.className = "shell";
     tabs.innerHTML = "";
-    const [body, ft] = !S.me            ? [scr_whoami, null]
-                     : !myMarketToday()  ? [scr_dayoff, null]
+    const enrolled = AUTH.person || AUTH.demo;
+    const [body, ft] = !enrolled          ? [scr_whoami, null]
+                     : !S.me              ? [scr_pickdemo, null]
+                     : !myMarketToday()   ? [scr_dayoff, null]
                      : (SELLER_SCREENS[S.screen] || SELLER_SCREENS.today);
     app.innerHTML = body();
     foot.innerHTML = ft ? `<div class="sticky-foot"><div class="sticky-foot-in">${ft()}</div></div>` : "";
@@ -2494,10 +2803,18 @@ document.addEventListener("click", e => {
   if(t.dataset.act==="market-close"){ S.marketOpen=null; render(); window.scrollTo(0,0); return; }
 
   if(t.id==="m-seller"){ S.mode="seller"; S.marketOpen=null; render(); return; }
-  if(t.id==="m-owner"){ S.mode="owner"; render(); return; }
+  if(t.id==="m-owner"){
+    S.mode="owner"; render();
+    loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
+    return;
+  }
 
   const tab = t.dataset.tab;
-  if(tab){ S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0); return; }
+  if(tab){
+    S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
+    if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
+    return;
+  }
 
   const go = t.dataset.go;
   if(go){
@@ -2508,6 +2825,8 @@ document.addEventListener("click", e => {
     if(go==="result"){
       S.status="closed"; S.endedAt=Date.now();
       if(!S.submittedAt) S.submittedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+      // Fire and forget: a market with no signal must not block the screen.
+      sendDay().then(() => render());
     }
     S.screen = go; render(); window.scrollTo(0,0); return;
   }
@@ -2520,6 +2839,10 @@ document.addEventListener("click", e => {
     render(); return;
   }
 
+  if(t.dataset.act==="retry-send"){
+    sendDay().then(()=>render());
+    toast("Trying…"); return;
+  }
   if(t.dataset.act==="addpay"){
     S.otherPays = (S.otherPays||[]).concat([{how:"", amount:""}]);
     render(); return;
@@ -2529,6 +2852,26 @@ document.addEventListener("click", e => {
     render(); return;
   }
 
+  if(t.dataset.act==="redeem"){
+    const code = (S.codeTyped||"").trim();
+    if(!code){ S.codeError="Type the code Nawid gave you."; render(); return; }
+    S.codeError = "Checking\u2026"; render();
+    redeemCode(code).then(res => {
+      if(res.ok){
+        S.me = AUTH.person; S.codeError = null; S.codeTyped = "";
+        MY_MARKET = marketOrAny(); MY_REC = recommendMarket(MY_MARKET.id);
+        S.screen = "today";
+      } else {
+        S.codeError = res.msg;
+      }
+      render(); window.scrollTo(0,0);
+    });
+    return;
+  }
+  if(t.dataset.act==="demo"){
+    AUTH.demo = true; saveAuth(); S.codeError=null; render(); window.scrollTo(0,0); return;
+  }
+
   if(t.dataset.me){
     S.me = t.dataset.me;
     MY_MARKET = marketOrAny();
@@ -2536,13 +2879,11 @@ document.addEventListener("click", e => {
     S.screen = "today";
     render(); window.scrollTo(0,0); return;
   }
-  if(t.dataset.act==="switch-me"){ S.me = null; render(); window.scrollTo(0,0); return; }
-
-  const samp = t.dataset.samp;
-  if(samp){
-    S.showSamples = samp==="yes";
-    if(!S.showSamples) P_IDS.forEach(p=>{ S.samples[p]=0; });
-    render(); return;
+  if(t.dataset.act==="switch-me"){
+    // Handing the phone to someone else means enrolling it again.
+    S.me = null;
+    if(!AUTH.demo){ AUTH.person=null; AUTH.name=null; AUTH.business=null; AUTH.role=null; saveAuth(); }
+    render(); window.scrollTo(0,0); return;
   }
 
   const sold = t.dataset.sold;
@@ -2664,7 +3005,20 @@ document.addEventListener("change", e => {
   }
 });
 
+ensureSession();
+
 render();
+
+/* A day that never made it off the phone goes again on its own - on
+   load, and the moment the phone says it is back online. The seller
+   should never have to remember to resend anything. */
+if(S.mode === "owner") loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
+
+function resendIfPending(){
+  if(S.status === "closed" && S.submittedAt && !S.sentAt) sendDay().then(() => render());
+}
+resendIfPending();
+window.addEventListener("online", resendIfPending);
 })();
 </script>
 
