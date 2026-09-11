@@ -690,6 +690,9 @@ const PRODUCTS = [
    unattributed it would inflate every tamale's money-per-pack - on a good day
    yield could read higher than full price, which looks broken. So the seller
    gives one number at close, and chip takings come back out of the yield. */
+// $6 a bag, confirmed. It matters more than it looks: chip money comes off the
+// takings before the packs are divided into them, so a wrong price here would
+// skew every seller's money-per-pack figure.
 const CHIPS = { price:6, bagsPerBig:6 };
 const chipsSold = () => Math.max(0, Number(S.chipsSold)||0);
 const chipMoney = () => chipsSold() * CHIPS.price;
@@ -2984,7 +2987,21 @@ document.addEventListener("click", e => {
     render(); window.scrollTo(0,0); return;
   }
   if(t.dataset.act==="switch-me"){
-    // Handing the phone to someone else means enrolling it again.
+    /* This signs the phone out, and codes are single use - so the way back in
+       is a new code from Nawid, which on a market morning he may not be awake
+       to send. It sat on the seller's own market screen reading "Bahir · not
+       you?", one tap, no warning. Somebody curious about their own app locks
+       themselves out of the day they are about to work.
+
+       Handing the phone to someone else is a real thing, so the button stays.
+       It asks first. */
+    if(!AUTH.demo && AUTH.person){
+      const who = AUTH.name || "this phone";
+      const ok = confirm("Sign " + who + " out of this phone?\n\n"
+        + "You will need a new code from Nawid before you can use it again. "
+        + "Only do this if somebody else is taking the phone.");
+      if(!ok) return;
+    }
     S.me = null;
     if(!AUTH.demo){ AUTH.person=null; AUTH.name=null; AUTH.business=null; AUTH.role=null; saveAuth(); }
     render(); window.scrollTo(0,0); return;
