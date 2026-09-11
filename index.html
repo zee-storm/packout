@@ -960,6 +960,9 @@ const ROTA = (()=>{
 
 function sellerMult(sid, mid){
   const s = slr(sid);
+  // A slot with nobody written down has no track record to lean on. Treat it
+  // as an average seller rather than letting the screen die on a missing name.
+  if(!s) return 1;
   return s.base + s.urban * (URBAN[mid] ?? 0.5);
 }
 
@@ -1534,7 +1537,10 @@ function estRevenue(sid, mid){
   return 100 * mkt(mid).size * sellerMult(sid,mid) * 12.7;
 }
 function bestSwap(){
-  const plans = TODAY_PLAN.filter(p=>p.sellerId!=="you");
+  // Only slots with a real name can be swapped. Fourteen markets have nobody
+  // written down, and Thursday is all four of them - suggesting a swap
+  // between two blanks is meaningless, and looking one up would crash.
+  const plans = TODAY_PLAN.filter(p => p.sellerId && p.sellerId !== "you" && slr(p.sellerId));
   let best = null;
   for(let i=0;i<plans.length;i++){
     for(let j=i+1;j<plans.length;j++){
