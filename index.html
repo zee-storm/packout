@@ -1037,7 +1037,7 @@ for(let w=8; w>=1; w--){
 
 /* Which seller is holding this phone. Picked once and remembered, so the app
    can open on THEIR market instead of whichever one happens to be first that
-   day. No server and no password - it stands in for the 6-digit code from the
+   day. No server and no password - it stands in for the sign-in code from the
    backend plan until there is something to enrol against. */
 function me(){ return S.me ? slr(S.me) : null; }
 function myMarketToday(){
@@ -1056,10 +1056,14 @@ function marketOrAny(){ return myMarketToday() || MARKETS[0]; }
    Sunday. A slot with nobody named is shown as unassigned rather than hidden:
    the owner needs to see the gap. */
 const TODAY_MARKETS = MARKETS.filter(m => m.day === DAYS[TODAY.getDay()]);
+/* Today's markets and who is down for each. The first one used to be forced
+   to "you", which put Nawid's own name on San Rafael - a market he does not
+   work and that has nobody written down at all. The phone's own day is found
+   by matching the person, not by being first in the list. */
 const TODAY_PLAN = TODAY_MARKETS.map((m, i) => ({
   marketId: m.id,
-  sellerId: i === 0 ? "you" : (m.crew[0] || null),
-  status: i === 0 ? "assigned" : (i % 3 === 0 ? "done" : "selling")
+  sellerId: m.crew[0] || null,
+  status: i % 3 === 0 ? "done" : "selling"
 }));
 
 /* ---- how much to send: the flagship calculation ---- */
@@ -2338,8 +2342,8 @@ function liveDay(plan){
   const reported = REAL_DAYS && REAL_DAYS[plan.marketId];
   if(reported) return dayFromCloud(reported, mkt(plan.marketId));
 
-  // fabricate a plausible in-progress or finished day for the owner view
-  if(plan.sellerId==="you"){
+  // The day being counted on this very phone, if the owner also sells today.
+  if(plan.sellerId && S.me && plan.sellerId === S.me && plan.marketId === MY_MARKET.id){
     const closed = S.screen==="result";
     let status = "Not started";
     if(closed) status="Closed";
@@ -2418,7 +2422,6 @@ function owner_market(mid){
       <td><div class="who">${esc(fmtShort(x.dateObj))}</div><div class="sub">${esc(slr(x.sellerId).name)}</div></td>
       <td class="n">${k.sold}</td>
       <td class="n">${money(k.revenue)}</td>
-      <td class="n"><span class="sub">${esc(x.weather.t)} ${x.weather.temp}&deg;</span></td>
       <td class="n"><span class="pill ${thin?"pill-warn":"pill-good"}">${money2(k.yieldPer)}</span></td>
     </tr>`;
   }).join("");
@@ -2429,6 +2432,12 @@ function owner_market(mid){
     <div>
       <h1 class="page">${esc(m.name)}</h1>
       <p class="note" style="margin-top:5px">${esc(DAY_FULL[m.day])}s &middot; ${m.hours ? esc(m.hours) : m.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`} &middot; stall fee ${money(feeOf(m))}${feeKnown(m)?"":GUESS}</p>
+    </div>
+
+    <div class="card card-pad stripe stripe-warn">
+      <div class="lbl">Sample figures</div>
+      <p class="note" style="margin-top:6px">The day-by-day list below is made up, so you can see the shape of it.
+      Real days replace it as they are sent in. <b>Nobody on this screen actually worked these days.</b></p>
     </div>
 
     ${d ? `<div class="card stripe stripe-${d.status==="Closed"?"good":"live"}">
@@ -2476,7 +2485,7 @@ function owner_market(mid){
     <div class="card">
       <div class="card-hd"><h3>Every day here</h3><span class="pill">${days.length} logged</span></div>
       <div class="tbl-wrap"><table>
-        <thead><tr><th>Day</th><th class="n">Packs</th><th class="n">Money</th><th class="n">Weather</th><th class="n">$/pack</th></tr></thead>
+        <thead><tr><th>Day</th><th class="n">Packs</th><th class="n">Money</th><th class="n">$/pack</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
     </div>
