@@ -725,17 +725,32 @@ const COMMISSION = 0.20;
    aim is that nobody relies on it: Zack is 220 at one market and 120 at
    another, so any single number is wrong for somebody. */
 const BASE_PAY_DEFAULT = 150;
-const basePayFor = sid => {
+
+/* A person carries their usual deal, and a market can override it. Zack is the
+   case that proves it is needed: $220 or 22% at Alameda on Saturday, $120 or
+   20% at Montclair on Sunday. Same man, same week. One figure against his name
+   would be wrong on at least one of those days. */
+function rateFor(sid, mid){
   const s = slr(sid);
-  return (s && typeof s.basePay === "number") ? s.basePay : BASE_PAY_DEFAULT;
-};
+  const m = mid ? mkt(mid) : null;
+  const over = (m && m.payBy) ? m.payBy[sid] : null;
+  const base = (over && over.basePay != null) ? over.basePay
+             : (s && typeof s.basePay === "number") ? s.basePay
+             : BASE_PAY_DEFAULT;
+  const rate = (over && over.rate != null) ? over.rate
+             : (s && typeof s.rate === "number") ? s.rate
+             : COMMISSION;
+  return { base, rate };
+}
+const basePayFor = sid => rateFor(sid, null).base;
+
 // The floor and the commission do not stack: whichever is more.
-function dayPay(sid, took){
-  const commission = took * COMMISSION;
-  const base = basePayFor(sid);
+function dayPay(sid, took, mid){
+  const { base, rate } = rateFor(sid, mid || null);
+  const commission = took * rate;
   return commission >= base
-    ? { amount: commission, kind: "commission", commission, base }
-    : { amount: base,       kind: "base",       commission, base };
+    ? { amount: commission, kind: "commission", commission, base, rate }
+    : { amount: base,       kind: "base",       commission, base, rate };
 }
 const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
 const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
@@ -833,12 +848,12 @@ const MARKETS = [
   { id:"pinole-sat", name:"Pinole", day:"Sat", crew:["muzamil","young"], vehicle:null },
   { id:"brentwood-sat", name:"Brentwood", day:"Sat", crew:["daud"], vehicle:null },
   { id:"northbeach-sat", name:"North Beach", day:"Sat", crew:[], vehicle:null },
-  { id:"alameda-sat", name:"Alameda", day:"Sat", crew:["zack"], vehicle:null },
+  { id:"alameda-sat", name:"Alameda", day:"Sat", crew:["zack"], vehicle:null, payBy:{ zack:{ basePay:220, rate:0.22 } } },
   { id:"hayward-sat", name:"Hayward", day:"Sat", crew:["emilio"], vehicle:null },
-  { id:"mountainview-sun", name:"Mountain View", day:"Sun", crew:["nawid","zack"], vehicle:"Own car" },
+  { id:"mountainview-sun", name:"Mountain View", day:"Sun", crew:["nawid"], vehicle:"Own car" },
   { id:"livermore-sun", name:"Livermore", day:"Sun", crew:["muzamil"], vehicle:"Own car" },
   { id:"temescal-sun", name:"Temescal", day:"Sun", crew:["billal"], vehicle:"Own car" },
-  { id:"montclair-sun", name:"Montclair", day:"Sun", crew:["young","muzamil"], vehicle:null },
+  { id:"montclair-sun", name:"Montclair", day:"Sun", crew:["young","muzamil","zack"], vehicle:null, payBy:{ zack:{ basePay:120, rate:0.20 } } },
   { id:"stonestown-sun", name:"Stonestown", day:"Sun", crew:["bahir"], vehicle:"Gold van" },
   { id:"fortmason-sun", name:"Fort Mason", day:"Sun", crew:["joey"], vehicle:null },
   { id:"divisadero-sun", name:"Divisadero", day:"Sun", crew:["amin"], vehicle:"Cargo van" },
@@ -909,13 +924,6 @@ const URBAN = (()=>{ const r = mulberry32(5150), o = {}; MARKETS.forEach(m => o[
 const WX_MULT = { "Clear":1.0, "Overcast":0.94, "Fog":0.90, "Rain":0.58, "Windy":0.88 };
 const wxMult = t => WX_MULT[t] || 1;
 
-const TODAY_WX = { t:"Clear", temp:74 };
-const FORECAST = (()=>{
-  const r = mulberry32(2718), o = {};
-  const kinds = Object.keys(WX_MULT);
-  MARKETS.forEach(m => o[m.id] = { t: kinds[Math.floor(r()*kinds.length)], temp: 62 + Math.round(r()*22) });
-  return o;
-})();
 
 const WEATHER = [
   { t:"Clear", temp:72, mult:1.0 }, { t:"Clear", temp:78, mult:1.02 },
@@ -1066,8 +1074,13 @@ function recommend(marketId, productId){
   const avg = normalised.reduce((a,b)=>a+b,0)/(normalised.length||1);
 
   const buffer = anySoldOut ? 1.30 : 1.15;
-  const fc = FORECAST[marketId] || null;
-  const wx = fc ? wxMult(fc.t) : 1;
+  /* There is no weather feed. FORECAST is a seeded random number that never
+     changes, and it used to both show as "Clear, 74° today" and quietly move
+     the quantity. A made-up forecast that changes what somebody loads into a
+     van is worse than no forecast, so it moves nothing until a real one
+     exists. */
+  const fc = null;
+  const wx = 1;
 
   const cs = prod(productId).caseSize;
   const qty = Math.ceil(avg*buffer*wx/cs)*cs;
@@ -1077,8 +1090,7 @@ function recommend(marketId, productId){
 function recommendMarket(marketId){
   const out = {}; let total = 0, plain = 0;
   P_IDS.forEach(pid => { const r = recommend(marketId,pid); out[pid]=r; total += r.qty; plain += r.plain; });
-  const fc = FORECAST[marketId] || null;
-  return { byProduct: out, total, plain, fc, wx: fc ? wxMult(fc.t) : 1 };
+  return { byProduct: out, total, plain, fc: null, wx: 1 };
 }
 
 /* ---- freezer stock ---- */
@@ -1112,13 +1124,22 @@ function saveAuth(){ try{ localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH)); 
 
 const STORE_KEY = "packout.v2";
 const NOTE_KEY  = "packout.note.v1";
-const DEFAULT_NOTE = "Push the oldest batch first today and lead with it when people walk up. Everything else stays full price.";
-let NOTE = DEFAULT_NOTE, NOTE_AT = "6:40am";
+/* Empty until somebody writes one. A default here reads to a seller as an
+   instruction from Nawid that Nawid never gave. */
+let NOTE = "", NOTE_AT = "";
 function loadNote(){
   try{ const r = localStorage.getItem(NOTE_KEY); if(r!==null) NOTE = r; }catch(e){}
 }
 function saveNote(){ try{ localStorage.setItem(NOTE_KEY, NOTE); }catch(e){} }
 const SELLER_SCREEN_NAMES = ["today","loadout","market","closeout","result"];
+
+/* Four fields are a number per flavour, not a single value. Typing into a
+   samples box used to run S.samples = "2" - replacing the whole record with
+   a string, losing every flavour's samples, and leaving the plus and minus
+   buttons silently doing nothing, because you cannot set a property on a
+   string. That is what "I wrote the samples" and then a short till looks
+   like from the inside. */
+const PER_PRODUCT = ["opening","closing","samples","damaged"];
 
 /* The phone is used before the market and after it. Never during. */
 const BLANK = {
@@ -1135,7 +1156,7 @@ const BLANK = {
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
   travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
-  packedBy:"you", showPacker:false, me:null, dayOf:null, sentAt:null, sendError:null,
+  packedBy:"you", showPacker:false, me:null, dayOf:null, startedAt:null, sentAt:null, sendError:null,
   codeTyped:"", codeError:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
@@ -1143,6 +1164,7 @@ loadNote();
 
 function save(){
   try{ S.dayOf = S.dayOf || localDay(new Date());
+       S.startedAt = S.startedAt || Date.now();
        localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
   catch(e){
     // Almost always the photo pushing past the storage limit.
@@ -1178,27 +1200,47 @@ function load(){
     const merged = Object.assign(fresh, saved);
     merged.opening  = Object.assign({}, fresh.opening,  saved.opening  || {});
     merged.closing  = Object.assign({}, fresh.closing,  saved.closing  || {});
-    merged.samples  = Object.assign({}, fresh.samples,  saved.samples  || {});
-    merged.damaged  = Object.assign({}, fresh.damaged,  saved.damaged  || {});
+    // A phone that already typed into samples has a string saved there.
+    // Take the object if it is one, and the blank row if it is not.
+    const obj = v => (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+    merged.samples  = Object.assign({}, fresh.samples,  obj(saved.samples));
+    merged.damaged  = Object.assign({}, fresh.damaged,  obj(saved.damaged));
     if(!Array.isArray(merged.corrections)) merged.corrections = [];
     if(!Array.isArray(merged.expenses)) merged.expenses = [];
     merged.travel = Object.assign({mode:"van",legs:0,passenger:"",marketId:"",gasMode:"claim",gasAmount:""}, merged.travel || {});
     delete merged.drive;
     if(!SELLER_SCREEN_NAMES.includes(merged.screen)) merged.screen = "today";
 
-    /* A saved day belongs to the date it was started on. Without this, a
-       seller who taps around the evening before opens the market itself
-       half-way through the flow, holding yesterday's counts against today's
-       cooler. Who they are is the one thing that carries over - they should
-       not have to say their name again every morning. */
+    /* When to throw a saved day away and start clean.
+
+       NOT at midnight. San Leandro runs to 7pm, they drive back, and they
+       count at the shop - Bahir's first real day was sent in at 2:53am. The
+       old rule was "different calendar date, start fresh", which wiped an
+       entire market's counts the moment the clock rolled over, mid-count,
+       with no warning and nothing to get back.
+
+       A market day ends when it is sent in, or when it is old enough that the
+       next one has clearly begun. Twenty hours covers a market that starts at
+       6am and gets counted at 2am; the closest two markets anybody works are
+       a full day apart, so it can never carry yesterday's counts into today's
+       cooler. Who they are always carries over. */
     const today = localDay(new Date());
-    if(merged.dayOf && merged.dayOf !== today){
+    const AGE_LIMIT = 20 * 60 * 60 * 1000;
+    const newCalendarDay = !!merged.dayOf && merged.dayOf !== today;
+    const tooOld = merged.startedAt
+      ? (Date.now() - merged.startedAt) > AGE_LIMIT
+      : newCalendarDay;                  // days saved before this rule existed
+    // A sent day stays on screen until the date changes, so they can look at
+    // what they sent. An unsent day stays until it is genuinely old.
+    if(merged.sentAt ? newCalendarDay : tooOld){
       const fresh = JSON.parse(JSON.stringify(BLANK));
       fresh.me = merged.me;
       fresh.dayOf = today;
+      fresh.startedAt = Date.now();
       return fresh;
     }
     merged.dayOf = merged.dayOf || today;
+    merged.startedAt = merged.startedAt || Date.now();
     return merged;
   }catch(e){ return null; }
 }
@@ -1390,7 +1432,7 @@ function dayFromCloud(row, m){
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
     overSend: 0, fixes: 0,
-    owed: dayPay(row.seller_id, gross).amount,
+    owed: dayPay(row.seller_id, gross, row.market_id).amount,
     reported: true
   };
 }
@@ -1584,7 +1626,7 @@ function dayStats(d){
   const yieldPer = sold>0 ? money_in/sold : 0;
   const fullPer  = sold>0 ? revenue/sold  : 0;
   return { sold, revenue, money_in, yieldPer, fullPer, given:revenue-money_in,
-           hrs, perHr:(revenue-feeOf(m))/hrs, commission:dayPay(d.sellerId, money_in).amount, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
+           hrs, perHr:(revenue-feeOf(m))/hrs, commission:dayPay(d.sellerId, money_in, d.marketId).amount, opened:P_IDS.reduce((a,p)=>a+d.opening[p],0) };
 }
 
 function toast(msg){
@@ -1626,13 +1668,13 @@ function scr_whoami(){
     <div>
       <div class="lbl">First time on this phone</div>
       <h1 class="page" style="margin-top:6px">Enter your code</h1>
-      <p class="note" style="margin-top:5px">Nawid gives you a 6-digit code. You type it once, on your own phone, and never again.</p>
+      <p class="note" style="margin-top:5px">Nawid gives you a short code with your name in it, like BAHIR-SAT. You type it once, on your own phone, and never again.</p>
     </div>
     <div class="card card-pad stack-sm">
       <div class="field">
         <label class="lbl" for="codebox">Your code</label>
         <input id="codebox" type="text" inputmode="text" autocapitalize="characters"
-               autocomplete="off" placeholder="ABC123" maxlength="12"
+               autocomplete="off" placeholder="NAME-DAY" maxlength="16"
                style="font-size:24px;letter-spacing:.18em;text-align:center;font-weight:600"
                value="${esc(S.codeTyped||"")}" data-set="codeTyped">
       </div>
@@ -1699,7 +1741,7 @@ function scr_today(){
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
       ${me() ? `<button class="btn btn-quiet btn-sm" data-act="switch-me" style="margin-top:8px">${esc(me().name)} &middot; not you?</button>` : ""}
       <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.hours ? esc(MY_MARKET.hours) : MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}</p>
-      <p class="note" style="margin-top:3px">${esc(TODAY_WX.t)}, ${TODAY_WX.temp}&deg; today</p>
+
     </div>
 
     <div class="card stripe stripe-live">
@@ -1707,21 +1749,17 @@ function scr_today(){
       ${rows}
     </div>
 
-    ${MY_REC.wx < 0.97 ? `<div class="card card-pad stripe stripe-warn">
-      <div class="spread"><div class="lbl">${esc(MY_REC.fc.t)} expected</div>
-        <span class="pill pill-warn">${MY_REC.total - MY_REC.plain} items</span></div>
-      <p class="note" style="margin-top:7px">${esc(MY_REC.fc.t)} and ${MY_REC.fc.temp}&deg; at this market today, so you're taking
-        ${MY_REC.plain - MY_REC.total} fewer than a normal day. Better than hauling them back cold.</p>
-    </div>` : ""}
+
 
     <div class="hint">
-      Built from your last 4 weeks here, plus a <b>15% cushion</b>.
-      ${esc(prod(OLDEST).short)} is the oldest batch \u2014 <b>made ${esc(BATCH_AGE[OLDEST].made)}, out ${BATCH_AGE[OLDEST].trips} times</b>. Push it first.
+      A starting number, not your history \u2014 nobody has recorded enough days here
+      yet. <b>Count what is actually in the cooler</b> and change anything that
+      does not match.
     </div>
 
     <div class="card card-pad stack-sm">
       <div class="lbl">Before you leave</div>
-      ${["Canopy + 4 weights","Tablecloth &amp; price sign","Square reader charged","$150 change in the till","Ice packs / dry ice","Gloves, sanitizer, trash bag","Sample tray + toothpicks"]
+      ${["Canopy + 4 weights","Tablecloth &amp; price sign","Square reader charged","Change for the till","Ice packs / dry ice","Gloves, sanitizer, trash bag","Sample tray + toothpicks"]
         .map(x=>`<div class="row" style="font-size:13px"><span style="color:var(--accent);font-weight:700">\u2713</span><span>${x}</span></div>`).join("")}
     </div>
 
@@ -1825,7 +1863,7 @@ function scr_loadout(){
       </div>` : ""}
     </div>
 
-    <div class="hint">Everything is <b>lard free and gluten free</b> &mdash; you'll get asked. This count is what everything else is measured against. If the cooler doesn't match, change it &mdash; nobody minds, and it keeps the numbers straight at the end.</div>
+    <div class="hint">The <b>tamales</b> are lard free and gluten free &mdash; you'll get asked. This count is what everything else is measured against. If the cooler doesn't match, change it &mdash; nobody minds, and it keeps the numbers straight at the end.</div>
   </div>`;
 }
 function foot_loadout(){
@@ -1839,7 +1877,7 @@ function scr_market(){
     <div>
       <div class="lbl">Step 2 of 3</div>
       <h1 class="page" style="margin-top:6px">At the market</h1>
-      <p class="note" style="margin-top:5px">One photo of your setup, then put the phone away until close.</p>
+      <p class="note" style="margin-top:5px">A photo of your setup if you can, then put the phone away until close.</p>
     </div>
 
     <div class="card card-pad stack-sm">
@@ -1866,6 +1904,7 @@ function scr_market(){
     <div class="hint">
       Get there <b>${MY_MARKET.setupBefore===1.5?"an hour and a half":"an hour"} before it opens</b>.
       The photo shows the shop the booth was actually up and ready, not just that you got there.
+      ${S.photo ? "" : "It is not required &mdash; you can still count up and send the day without one."}
     </div>
 
     ${S.packedAt ? `<div class="card card-pad spread">
@@ -1873,10 +1912,7 @@ function scr_market(){
       <div style="text-align:right"><div class="lbl">Left the shop</div><div class="mid" style="margin-top:5px">${esc(S.packedAt)}</div></div>
     </div>` : ""}
 
-    ${NOTE.trim() ? `<div class="card stripe stripe-live">
-      <div class="card-hd"><h3>From the shop</h3><span class="pill pill-live">${esc(NOTE_AT)}</span></div>
-      <div class="card-pad"><p style="margin:0;font-size:15px;line-height:1.5">${esc(NOTE)}</p></div>
-    </div>` : ""}
+
 
     <div class="card card-pad stack-sm">
       <div class="lbl">Rest of the day</div>
@@ -1885,7 +1921,7 @@ function scr_market(){
   </div>`;
 }
 function foot_market(){
-  return `<button class="btn" data-go="closeout" ${S.photo?"":"disabled"}>Market's over &mdash; count up</button>
+  return `<button class="btn" data-go="closeout">Market's over &mdash; count up</button>
           <button class="btn btn-quiet" data-go="loadout">Back</button>`;
 }
 
@@ -1975,7 +2011,7 @@ function scr_closeout(){
       <div class="card-hd"><h3>The money</h3><span class="pill">${money2(moneyIn())}</span></div>
       <div class="card-pad stack">
         <div class="field field-money">
-          <label class="lbl" for="cash">All cash taken, before your pay (not counting your $150 float)${S.cashCounted===""?` &middot; <span class="needed">needed</span>`:""}</label>
+          <label class="lbl" for="cash">All cash taken, before your pay (not counting the change you started with)${S.cashCounted===""?` &middot; <span class="needed">needed</span>`:""}</label>
           <input id="cash" type="number" inputmode="decimal" placeholder="0" value="${esc(S.cashCounted)}" data-set="cashCounted">
         </div>
         <div class="field field-money">
@@ -2169,7 +2205,7 @@ function scr_result(){
   const drivePay = driverPay();
   const inHand = moneyIn();
   const dayTook = inHand + fromTill;             // everything the day sold
-  const pay = dayPay(S.me, dayTook);
+  const pay = dayPay(S.me, dayTook, MY_MARKET.id);
   const commission = pay.amount;
   const carGas = carAllowance();
   const owed = commission + drivePay + fromOwn + carGas;
@@ -2211,9 +2247,9 @@ function scr_result(){
       </div>
       <div class="card-pad" style="padding-top:0">
         ${pay.kind === "commission"
-          ? `<div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(COMMISSION*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(pay.commission)}</span></div>`
+          ? `<div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(pay.rate*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(pay.commission)}</span></div>`
           : `<div class="kv"><span class="kv-k">Your day rate</span><span class="kv-v">${money2(pay.base)}</span></div>
-             <div class="kv"><span class="kv-k" style="color:var(--muted)">${Math.round(COMMISSION*100)}% would have been ${money2(pay.commission)}</span><span class="kv-v" style="color:var(--muted)">&mdash;</span></div>`}
+             <div class="kv"><span class="kv-k" style="color:var(--muted)">${Math.round(pay.rate*100)}% would have been ${money2(pay.commission)}</span><span class="kv-v" style="color:var(--muted)">&mdash;</span></div>`}
         ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?" both ways":" one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
         ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
         ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
@@ -2250,12 +2286,14 @@ function scr_result(){
       <div class="tile"><div class="lbl">Sell-through</div><div class="mid">${openedTotal()>0?Math.round(sold/openedTotal()*100):0}%</div><div class="tile-sub">of what you took</div></div>
     </div>
 
-    <div class="card card-pad stack-sm stripe stripe-${S.sentAt ? "good" : "warn"}">
+    <div class="card card-pad stack-sm stripe stripe-${S.sentAt || AUTH.demo ? "good" : "warn"}">
       <div class="spread">
-        <div class="lbl">${S.sentAt ? "Sent to the shop" : "Waiting for signal"}</div>
-        ${S.sentAt ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
+        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : "Waiting for signal"}</div>
+        ${S.sentAt || AUTH.demo ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
       </div>
-      <p class="note">${S.sentAt
+      <p class="note">${AUTH.demo
+        ? "This is the look-around version, so nothing left this phone. On a real phone this day would already be with Nawid."
+        : S.sentAt
         ? "Nawid has this day. The counts, the money and your notes went up on their own \u2014 nobody has to retype anything."
         : "Saved on your phone. It goes on its own as soon as you have signal, even if you close the app. Nothing is lost."}</p>
       <div class="chips" style="margin-top:4px">
@@ -2312,7 +2350,7 @@ function liveDay(plan){
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: S.corrections.length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
-             owed: closed ? (dayPay(S.me, moneyIn()+expTotal("till")).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
+             owed: closed ? (dayPay(S.me, moneyIn()+expTotal("till"), MY_MARKET.id).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
 
@@ -2353,7 +2391,7 @@ function liveDay(plan){
            status: done ? "Closed" : "Set up "+setupAt,
            live: !done, perPack: done ? rev/sold : null, fullPer: listPer,
            overSend: out - sendList, fixes:0,
-           owed: done ? dayPay(plan.sellerId, rev).amount : 0 };
+           owed: done ? dayPay(plan.sellerId, rev, plan.marketId).amount : 0 };
 }
 
 function owner_market(mid){
@@ -2519,6 +2557,23 @@ function owner_today(){
       /* Who is getting the least out of each pack. Says what it costs, and
          nothing about why - free ones, their own deals and trades all land
          here, and none of it is provable from a count. */
+      /* This is the screen that says whose packs bring in the least, and it
+         is the one thing in here that must never run on made-up days. The
+         sample history exists to show what the screens do; put a real name
+         next to it and Nawid takes a number nobody earned to Habid.
+
+         So until enough real days have been reported, it says what it will
+         do and names nobody. */
+      const realDays = REAL_DAYS ? Object.keys(REAL_DAYS).length : 0;
+      if(realDays < 8){
+        return `<div class="insight">
+          <div class="insight-mark">Once the days add up</div>
+          <p>This is where the app tells you <b>whose packs bring in the least money each</b>,
+          and by how much across everything they have sold. It needs real reported days first
+          &mdash; ${realDays === 0 ? "none have come in yet" : realDays + " so far"}. Nothing here is
+          guessed at, because a guess with somebody's name on it is worse than nothing.</p>
+        </div>`;
+      }
       const crew = crewYield();
       const recs = SELLERS.map(s=>({s, r:yieldRecord(s.id)})).filter(x=>x.r.sold>0);
       if(recs.length < 2) return "";
@@ -2535,17 +2590,17 @@ function owner_today(){
       </div>`;
     })()}
     <div class="card">
-      <div class="card-hd"><h3>Message to the crew</h3><span class="pill">${NOTE.trim()?"posted "+esc(NOTE_AT):"nothing posted"}</span></div>
+      <div class="card-hd"><h3>Message to the crew</h3><span class="pill">${NOTE.trim()?"saved "+esc(NOTE_AT):"nothing saved"}</span></div>
       <div class="card-pad stack-sm">
         <div class="field">
           <textarea id="noteBox" placeholder="Push the oldest batch today." data-set="ownerNote">${esc(NOTE)}</textarea>
         </div>
         <div class="row" style="gap:8px">
-          <button class="btn btn-sm" data-act="note-save" style="flex:2">Post to everyone</button>
+          <button class="btn btn-sm" data-act="note-save" style="flex:2">Save this message</button>
           <button class="btn btn-quiet btn-sm" data-act="note-clear" style="flex:1">Clear</button>
         </div>
-        <div class="hint">Everyone sees this on their setup screen, before they start selling &mdash; the one time the phone is already in their hand.
-        For something meant for one market only, tap that person's name below and text them.</div>
+        <div class="hint"><b>This stays on your phone for now.</b> Getting it onto the
+        crew's phones is not built yet, so for anything they need today, text them.</div>
       </div>
     </div>
 
@@ -2565,8 +2620,7 @@ function owner_send(){
         return `<td class="n"><span class="chip ${hi?"chip-hi":""}">${rec.qty}</span></td>`;
       }).join("")}
       <td class="n" style="font-weight:600">${r.total}</td>
-      <td class="n"><span class="sub">${esc(r.fc?r.fc.t:"")} ${r.fc?r.fc.temp+"&deg;":""}</span>
-        ${r.wx<0.97?`<div class="delta down">${r.total-r.plain}</div>`:""}</td>
+
     </tr>`;
   }).join("");
 
@@ -2581,7 +2635,13 @@ function owner_send(){
     <div>
       <div class="lbl">Week of ${esc(fmtShort(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">Send list</h1>
-      <p class="note" style="margin-top:5px">Built from the last 4 weeks at each market, by product, rounded to full cases.</p>
+      <p class="note" style="margin-top:5px">By market and by product, rounded to full cases.</p>
+    </div>
+    <div class="card card-pad stripe stripe-warn">
+      <div class="lbl">Sample figures</div>
+      <p class="note" style="margin-top:6px">Every number on this screen is worked from made-up days,
+      so you can see what it does. It turns into your own the moment enough real days have been
+      sent in. <b>Nothing here is a fact about anybody yet.</b></p>
     </div>
 
     <div class="card">
@@ -2595,32 +2655,19 @@ function owner_send(){
       </div>
     </div>
 
-    <div class="insight">
-      <div class="insight-mark">Move first</div>
-      <p><b>${esc(prod(OLDEST).short)} made ${esc(BATCH_AGE[OLDEST].made)} has been out ${BATCH_AGE[OLDEST].trips} times.</b> Send that batch to Temescal and Grand Lake this week \u2014 they move it fastest \u2014 before it has to be written off.</p>
-    </div>
+
 
     <div class="card">
       <div class="card-hd"><h3>By market</h3><span class="pill">${grand} packs out</span></div>
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>Market</th>${PRODUCTS.map(p=>`<th class="n">${esc(p.short)}</th>`).join("")}<th class="n">Total</th><th class="n">Weather</th></tr></thead>
+          <thead><tr><th>Market</th>${PRODUCTS.map(p=>`<th class="n">${esc(p.short)}</th>`).join("")}<th class="n">Total</th></tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
     </div>
     <div class="hint">Highlighted numbers are markets that <b>sold out recently</b> \u2014 those get a bigger cushion so you stop losing the last hour.</div>
-    ${(()=>{
-      const wet = MARKETS.map(m=>({m, r:recommendMarket(m.id)})).filter(x=>x.r.wx<0.97);
-      if(!wet.length) return "";
-      const cut = wet.reduce((a,x)=>a+(x.r.plain-x.r.total),0);
-      return `<div class="insight">
-        <div class="insight-mark">Weather</div>
-        <p><b>${wet.map(x=>esc(x.m.name)+" ("+esc(x.r.fc.t.toLowerCase())+")").join(", ")}.</b>
-        That is <b>${cut} fewer packs</b> going out than a clear week, so they do not ride around all day and come back.
-        Slow days at those markets will not count against the seller either &mdash; a rained-out Saturday is left out of their average.</p>
-      </div>`;
-    })()}
+
   </div>`;
 }
 
@@ -2654,6 +2701,12 @@ function owner_people(){
       <h1 class="page">People</h1>
       <p class="note" style="margin-top:5px">Each person is measured against what that market normally does \u2014 not against each other. A big market doesn't make you a better seller.</p>
     </div>
+    <div class="card card-pad stripe stripe-warn">
+      <div class="lbl">Sample figures</div>
+      <p class="note" style="margin-top:6px">Every number on this screen is worked from made-up days,
+      so you can see what it does. It turns into your own the moment enough real days have been
+      sent in. <b>Nothing here is a fact about anybody yet.</b></p>
+    </div>
     <div class="card">
       <div class="tbl-wrap">
         <table>
@@ -2677,7 +2730,7 @@ function owner_people(){
       </div>`;
     })()}
     <div class="card">
-      <div class="card-hd"><h3>This week's pay</h3><span class="pill">${Math.round(COMMISSION*100)}% of money taken</span></div>
+      <div class="card-hd"><h3>This week's pay</h3><span class="pill">day rate or commission, whichever is more</span></div>
       <div class="card-pad">
         ${SELLERS.map(s=>{
           const wk = HISTORY.filter(d=>d.sellerId===s.id).slice(-2);
@@ -2687,7 +2740,7 @@ function owner_people(){
         <div class="kv kv-total"><span class="kv-k">Total payroll</span><span class="kv-v">${money2(SELLERS.reduce((a,s)=>a+HISTORY.filter(d=>d.sellerId===s.id).slice(-2).reduce((b,d)=>b+dayStats(d).commission,0),0))}</span></div>
       </div>
     </div>
-    <div class="hint">Sellers see this same screen for themselves. Same math on both phones, so there's nothing to argue about on payday.</div>
+    <div class="hint">Each seller sees their own pay worked out the same way on their own phone, so there's nothing to argue about on payday.</div>
   </div>`;
 }
 
@@ -2727,6 +2780,12 @@ function owner_markets(){
     <div>
       <h1 class="page">Markets</h1>
       <p class="note" style="margin-top:5px">Sorted by what each one actually pays per hour worked \u2014 including packing, driving both ways, setup and teardown. Not just the four hours of selling.</p>
+    </div>
+    <div class="card card-pad stripe stripe-warn">
+      <div class="lbl">Sample figures</div>
+      <p class="note" style="margin-top:6px">Every number on this screen is worked from made-up days,
+      so you can see what it does. It turns into your own the moment enough real days have been
+      sent in. <b>Nothing here is a fact about anybody yet.</b></p>
     </div>
     <div class="tiles">
       <div class="tile"><div class="lbl">Best per hour</div><div class="mid">${money(best.perHr)}</div><div class="tile-sub">${esc(best.m.name)}</div></div>
@@ -2884,7 +2943,12 @@ document.addEventListener("click", e => {
   }
 
   if(t.dataset.act==="redeem"){
-    const code = (S.codeTyped||"").trim();
+    // Phone keyboards turn a typed hyphen into an en dash and drop spaces in,
+    // and a code that is right but punctuated wrong should still work.
+    const code = (S.codeTyped||"").toUpperCase()
+                   .replace(/[\u2010-\u2015]/g, "-")
+                   .replace(/\s+/g, "")
+                   .trim();
     if(!code){ S.codeError="Type the code Nawid gave you."; render(); return; }
     S.codeError = "Checking\u2026"; render();
     redeemCode(code).then(res => {
@@ -2939,7 +3003,7 @@ document.addEventListener("click", e => {
     const b = $("noteBox");
     NOTE = b ? b.value : NOTE;
     NOTE_AT = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
-    saveNote(); buzz(20); toast(NOTE.trim()?"Posted to everyone":"Message cleared"); render(); return;
+    saveNote(); buzz(20); toast(NOTE.trim()?"Saved on this phone":"Message cleared"); render(); return;
   }
   if(act==="note-clear"){ NOTE=""; saveNote(); toast("Message cleared"); render(); return; }
   if(act==="exp-add"){
@@ -3012,9 +3076,10 @@ document.addEventListener("input", e => {
 
   const key = el.dataset.set;
   if(!key || key === "ownerNote") return;
-  if(key === "opening" || key === "closing"){
+  if(PER_PRODUCT.includes(key)){
     const v = el.value;
-    S[key][el.dataset.p] = v === "" ? undefined : Math.max(0, Math.round(Number(v) || 0));
+    const blank = key === "opening" || key === "closing" ? undefined : 0;
+    S[key][el.dataset.p] = v === "" ? blank : Math.max(0, Math.round(Number(v) || 0));
   } else if(key === "passenger" || key === "passengerMarket" || key === "gasAmount"){
     return;                       // these are selects; change is enough
   } else {
@@ -3066,7 +3131,7 @@ document.addEventListener("change", e => {
   if(key==="passenger"){ S.travel = Object.assign({}, S.travel, {passenger:el.value}); render(); return; }
   if(key==="passengerMarket"){ S.travel = Object.assign({}, S.travel, {marketId:el.value}); render(); return; }
   if(key==="gasAmount"){ S.travel = Object.assign({}, S.travel, {gasAmount:el.value}); render(); return; }
-  if(key==="opening" || key==="closing"){
+  if(PER_PRODUCT.includes(key)){
     S[key][el.dataset.p] = Math.max(0, Math.round(Number(el.value)||0));
     render();
   } else {
