@@ -720,7 +720,11 @@ const COMMISSION = 0.20;
 /* What one person earns for a day. Placeholder until the real figures are in
    - "most is like 160" but Nawid raises and lowers it per person, so a single
    shop-wide number would quietly pay several people the wrong amount. */
-const BASE_PAY_DEFAULT = 160;   // placeholder - only Bahir's is confirmed
+/* Nawid said "most is like 160". Both sellers asked directly said 150. Going
+   with the people who receive it - but this default is still a guess, and the
+   aim is that nobody relies on it: Zack is 220 at one market and 120 at
+   another, so any single number is wrong for somebody. */
+const BASE_PAY_DEFAULT = 150;
 const basePayFor = sid => {
   const s = slr(sid);
   return (s && typeof s.basePay === "number") ? s.basePay : BASE_PAY_DEFAULT;
@@ -792,7 +796,7 @@ const SELLERS = [
   { id:"musawir", name:"Musawir" },
   { id:"muzamil", name:"Muzamil" },
   { id:"nawid", name:"Nawid" },
-  { id:"suliman", name:"Suliman" },
+  { id:"suliman", name:"Suliman", basePay:150 },
   { id:"young", name:"Young" },
   { id:"zack", name:"Zack" }
 ];
