@@ -1444,6 +1444,48 @@ function dayFromCloud(row, m){
   };
 }
 
+/* Is the day sitting on the server for this market and date ours?
+   true  - yes, this phone's own day is in
+   false - somebody else's day is in that slot
+   null  - could not find out (no signal, no answer) */
+async function dayAlreadyThere(){
+  try{
+    await ensureSession();
+    const r = await fetch(CLOUD.url + "/rest/v1/market_days"
+      + "?business_id=eq." + encodeURIComponent(CLOUD.business)
+      + "&market_id=eq."   + encodeURIComponent(MY_MARKET.id)
+      + "&day_date=eq."    + encodeURIComponent(S.dayOf || localDay(new Date()))
+      + "&select=seller_id,cash,card",
+      { headers: cloudHeaders() });
+    if(!r.ok) return null;
+    const rows = await r.json();
+    if(!rows.length) return false;
+    const row = rows[0];
+    const sameMoney = Number(row.cash) === (Number(S.cashCounted) || 0)
+                   && Number(row.card) === (Number(S.cardTotal)   || 0);
+    return row.seller_id === S.me && sameMoney;
+  }catch(e){ return null; }
+}
+
+/* A day this phone believes it sent, that is not actually there.
+
+   It happened on Bahir's first Friday: a test day was already occupying the
+   slot, the send was refused, and the app called it sent anyway. The counts
+   sat on his phone and nobody knew. Checking costs one request and only ever
+   un-sends a day when the server answers plainly that it does not have it. */
+async function verifySent(){
+  if(!S.sentAt || AUTH.demo || !AUTH.business) return;
+  const there = await dayAlreadyThere();
+  if(there === false){
+    S.sentAt = null;
+    S.sendError = "notthere";
+    save();
+    const again = await sendDay();
+    render();
+    if(again === "sent") toast("Your day has gone in now");
+  }
+}
+
 async function sendDay(){
   if(S.sentAt) return "already";
   if(AUTH.demo || !AUTH.business) return "local";
@@ -1455,11 +1497,25 @@ async function sendDay(){
       body: JSON.stringify(dayPayload())
     });
     if(res.status === 409){
-      // Same market, same date, already in. Nothing to do and nothing wrong.
-      S.sentAt = S.sentAt || new Date().toISOString();
-      S.sendError = null;
-      save();
-      return "sent";
+      /* One sheet per market per day, refused by the database. That is nearly
+         always this phone sending its own day twice - harmless. But it is also
+         what happens when somebody ELSE's day is already sitting in the slot,
+         and then calling it "sent" is a lie that loses a whole market.
+
+         So find out which. Only our own day counts as sent. */
+      const mine = await dayAlreadyThere();
+      if(mine === true){
+        S.sentAt = S.sentAt || new Date().toISOString();
+        S.sendError = null;
+        save();
+        return "sent";
+      }
+      if(mine === false){
+        S.sendError = "clash";
+        save();
+        return "clash";
+      }
+      throw new Error("day 409");        // could not tell - treat as not sent
     }
     if(!res.ok) throw new Error("day " + res.status);
     const day = (await res.json())[0];
@@ -2295,13 +2351,15 @@ function scr_result(){
 
     <div class="card card-pad stack-sm stripe stripe-${S.sentAt || AUTH.demo ? "good" : "warn"}">
       <div class="spread">
-        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : "Waiting for signal"}</div>
+        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : S.sendError === "clash" ? "Could not go in yet" : "Waiting for signal"}</div>
         ${S.sentAt || AUTH.demo ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
       </div>
       <p class="note">${AUTH.demo
         ? "This is the look-around version, so nothing left this phone. On a real phone this day would already be with Nawid."
         : S.sentAt
         ? "Nawid has this day. The counts, the money and your notes went up on their own \u2014 nobody has to retype anything."
+        : S.sendError === "clash"
+        ? "A different day is already logged for this market today, so yours could not go in. Nothing you did is wrong and nothing is lost \u2014 your counts are safe on this phone. Tell Nawid, and tap Try again once he says it is clear."
         : "Saved on your phone. It goes on its own as soon as you have signal, even if you close the app. Nothing is lost."}</p>
       <div class="chips" style="margin-top:4px">
         ${WENT_OUT().map(pid=>`<span class="chip">${esc(prod(pid).short)} ${soldByCount(pid)} sold \u00B7 ${S.closing[pid]||0} back</span>`).join("")}
@@ -3169,6 +3227,9 @@ document.addEventListener("change", e => {
 ensureSession();
 
 render();
+
+/* A day the phone thinks it sent, but the shop never received. */
+verifySent();
 
 /* A day that never made it off the phone goes again on its own - on
    load, and the moment the phone says it is back online. The seller
