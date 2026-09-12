@@ -1375,6 +1375,11 @@ function dayPayload(){
     other_pays: (S.otherPays || []).filter(o => Number(o.amount)),
     chips_sold: chipsSold(),
     spent_from_till: expTotal("till"),
+    // What the seller laid out of their own pocket. The shop owes this back on
+    // top of pay, and until now it never left the phone - the seller's screen
+    // said one number and the owner's said a smaller one.
+    fronted: expTotal("own"),
+    fronted_items: (S.expenses || []).filter(e => e.source === "own" && Number(e.amount)),
     discounts: Number(S.discounts) || 0,
     note: S.note || null
   };
@@ -1439,7 +1444,10 @@ function dayFromCloud(row, m){
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
     overSend: 0, fixes: 0,
-    owed: dayPay(row.seller_id, gross, row.market_id).amount,
+    // Pay, plus whatever they fronted. Fronted money is not sales, so it never
+    // counts towards commission - it is simply owed back.
+    owed: dayPay(row.seller_id, gross, row.market_id).amount + Number(row.fronted || 0),
+    fronted: Number(row.fronted || 0),
     reported: true
   };
 }
@@ -2368,7 +2376,9 @@ function scr_result(){
 
     <div class="card stripe stripe-good">
       <div class="card-hd">
-        <div><h3>Sent in</h3><div class="sub" style="margin-top:3px">${esc(S.submittedAt||"")}</div></div>
+        <div><h3>Sent in</h3><div class="sub" style="margin-top:3px">${esc(
+          S.sentAt ? new Date(S.sentAt).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"})
+                   : (S.submittedAt || ""))}</div></div>
         <span class="pill pill-good">Locked</span>
       </div>
       <div class="card-pad stack-sm">
@@ -2388,10 +2398,10 @@ function scr_result(){
       </div>
     </div>
 
-    <div style="text-align:center;padding-top:10px">
+    ${AUTH.demo ? `<div style="text-align:center;padding-top:10px">
       <button class="btn btn-quiet" data-act="reset" style="width:auto;margin:0 auto;opacity:.65">Demo: start a fresh day</button>
       <p class="note" style="margin-top:7px;font-size:11px">Demo control only. The real app has no way to redo a day.</p>
-    </div>
+    </div>` : ""}
   </div>`;
 }
 
