@@ -1345,7 +1345,16 @@ async function redeemCode(code){
       method:"POST", headers: cloudHeaders(), body: JSON.stringify({ p_code: code })
     });
     const d = await r.json();
-    if(!r.ok) return { ok:false, msg: (d && d.message) || "That code did not work." };
+    if(!r.ok){
+      /* The database says "that code is not valid" and stops there. True, and
+         useless to somebody standing at a market: it could be mistyped, used
+         already, run out, or never made in the first place - which is what
+         happened to Suliman. All four have the same next step, so say it. */
+      const raw = (d && d.message) || "";
+      return { ok:false, msg: /not valid/i.test(raw)
+        ? "That code isn't working. It may have been used already, or run out. Ask Nawid to send you a new one."
+        : (raw || "That code did not work.") };
+    }
     const row = Array.isArray(d) ? d[0] : d;
     if(!row) return { ok:false, msg:"That code did not work." };
     AUTH.business = row.out_business_id;
@@ -1739,13 +1748,13 @@ function scr_whoami(){
     <div>
       <div class="lbl">First time on this phone</div>
       <h1 class="page" style="margin-top:6px">Enter your code</h1>
-      <p class="note" style="margin-top:5px">Nawid gives you a short code with your name in it, like BAHIR-SAT. You type it once, on your own phone, and never again.</p>
+      <p class="note" style="margin-top:5px">Nawid sends you a short code, six letters and numbers. You type it once, on your own phone, and never again.</p>
     </div>
     <div class="card card-pad stack-sm">
       <div class="field">
         <label class="lbl" for="codebox">Your code</label>
         <input id="codebox" type="text" inputmode="text" autocapitalize="characters"
-               autocomplete="off" placeholder="NAME-DAY" maxlength="16"
+               autocomplete="off" placeholder="ABC123" maxlength="16"
                style="font-size:24px;letter-spacing:.18em;text-align:center;font-weight:600"
                value="${esc(S.codeTyped||"")}" data-set="codeTyped">
       </div>
