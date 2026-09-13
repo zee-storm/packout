@@ -1217,7 +1217,7 @@ const BLANK = {
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
   travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
-  packedBy:"you", showPacker:false, me:null, dayOf:null, startedAt:null, sentAt:null, sendError:null,
+  packedBy:"you", showPacker:false, me:null, dayOf:null, marketId:null, startedAt:null, sentAt:null, sendError:null,
   codeTyped:"", codeError:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
@@ -1225,6 +1225,10 @@ loadNote();
 
 function save(){
   try{ S.dayOf = S.dayOf || todayStamp();
+       // Stamped once, from a real market only. On a day off there is no
+       // market to stamp, and guessing one is what filed a seller's takings
+       // against a market three hours away that he has never worked.
+       if(!S.marketId){ const m = myMarketToday(); if(m) S.marketId = m.id; }
        S.startedAt = S.startedAt || Date.now();
        localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
   catch(e){
@@ -1456,8 +1460,12 @@ async function redeemCode(code){
 }
 
 // What one finished day looks like on the wire - the paper, as data.
+/* The market this day belongs to - not whichever one the phone is showing.
+   They are the same on a market day and different on every other day. */
+const dayMarket = () => (S.marketId && mkt(S.marketId)) || null;
+
 function dayPayload(){
-  const m = MY_MARKET, who = me();
+  const m = dayMarket() || MY_MARKET, who = me();
   return {
     business_id: CLOUD.business,
     market_id: m.id,
@@ -1555,9 +1563,11 @@ function dayFromCloud(row, m){
 async function dayAlreadyThere(){
   try{
     await ensureSession();
+    const m = dayMarket();
+    if(!m) return null;               // no market on this day: nothing to check
     const r = await fetch(CLOUD.url + "/rest/v1/market_days"
       + "?business_id=eq." + encodeURIComponent(CLOUD.business)
-      + "&market_id=eq."   + encodeURIComponent(MY_MARKET.id)
+      + "&market_id=eq."   + encodeURIComponent(m.id)
       + "&day_date=eq."    + encodeURIComponent(S.dayOf || todayStamp())
       + "&select=seller_id,cash,card",
       { headers: cloudHeaders() });
@@ -1579,6 +1589,11 @@ async function dayAlreadyThere(){
    un-sends a day when the server answers plainly that it does not have it. */
 async function verifySent(){
   if(!S.sentAt || AUTH.demo || !AUTH.business) return;
+  /* Only ever re-check a day that knows its own market. This check was added
+     to rescue a day the shop never received; pointed at the wrong market it
+     did the opposite, and sent a second copy of a seller's takings in against
+     a Monday market in another county. */
+  if(!dayMarket()) return;
   const there = await dayAlreadyThere();
   if(there === false){
     S.sentAt = null;
@@ -1593,6 +1608,7 @@ async function verifySent(){
 async function sendDay(){
   if(S.sentAt) return "already";
   if(AUTH.demo || !AUTH.business) return "local";
+  if(!dayMarket()) return "local";     // nothing to file it against
   try{
     await ensureSession();
     const res = await fetch(CLOUD.url + "/rest/v1/market_days", {
