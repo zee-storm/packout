@@ -684,7 +684,6 @@ const PRODUCTS = [
   { id:"pumpkin",    name:"Pumpkin",             short:"Pumpkin",     price:15, caseSize:1, kind:"tamale", diet:"vegan" },
   { id:"beans",      name:"Red and Black Beans", short:"Red & black", price:15, caseSize:1, kind:"tamale", diet:"vegan" },
   { id:"breakfast",  name:"Breakfast",           short:"Breakfast",   price:15, caseSize:1, kind:"tamale", diet:"veg" },
-  { id:"eggplant",   name:"Eggplant",            short:"Eggplant",    price:15, caseSize:1, kind:"tamale", diet:"vegan" },
 
   /* Salsas ride along in the same list so they get counted, priced and paid
      out exactly like everything else. The kind is what keeps them out of the
@@ -2069,14 +2068,21 @@ function scr_market(){
       <div class="chips">${PRODUCTS.map(p=>`<span class="chip">${esc(p.short)} ${S.opening[p.id]||0}</span>`).join("")}</div>
     </div>
 
+    ${S.packedAt ? `<div class="card card-pad spread">
+      <div><div class="lbl">Packed by</div><div style="font-size:14px;font-weight:600;margin-top:5px">${esc(packedByName())}</div></div>
+      <div style="text-align:right"><div class="lbl">Left the shop</div><div class="mid" style="margin-top:5px">${esc(S.packedAt)}</div></div>
+    </div>` : ""}
     ${S.photo
       ? `<div class="card stripe stripe-good">
            <div class="card-hd">
-             <div><h3>Setup logged</h3><div class="sub" style="margin-top:3px">${esc(S.arrivedAt)}</div></div>
+             <div><h3>Booth setup</h3></div>
              <span class="pill pill-good">Time stamped</span>
            </div>
            <img src="${S.photo}" alt="Your booth setup" style="display:block;width:100%;height:auto">
-           <div class="card-pad"><button class="btn btn-quiet" data-act="retake">Take it again</button></div>
+           <div class="card-pad spread">
+             <div><div class="lbl">Booth up at</div><div class="mid" style="margin-top:5px">${esc(S.arrivedAt)}</div></div>
+             <button class="btn btn-quiet btn-sm" data-act="retake" style="width:auto">Take it again</button>
+           </div>
          </div>`
       : `<label class="btn btn-ghost" style="min-height:96px;flex-direction:column;gap:5px;cursor:pointer">
            <span>Photo of your setup</span>
@@ -2090,10 +2096,6 @@ function scr_market(){
       ${S.photo ? "" : "It is not required &mdash; you can still count up and send the day without one."}
     </div>
 
-    ${S.packedAt ? `<div class="card card-pad spread">
-      <div><div class="lbl">Packed by</div><div style="font-size:14px;font-weight:600;margin-top:5px">${esc(packedByName())}</div></div>
-      <div style="text-align:right"><div class="lbl">Left the shop</div><div class="mid" style="margin-top:5px">${esc(S.packedAt)}</div></div>
-    </div>` : ""}
 
 
 
