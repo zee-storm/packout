@@ -1800,10 +1800,48 @@ async function loadRealDays(){
     await loadRealFixes(today);
     await loadRealUnfinished();
     await loadRealSecondSheets(today);
+    await loadRealEarlier(today);
     return true;
   }catch(e){
     REAL_DAYS = REAL_DAYS || {};      // an empty answer, not a broken screen
     return false;
+  }
+}
+
+/* Fixes and second sheets for an earlier date. Both used to be read for today
+   only, on today's market cards - so a fix asked for the morning after an
+   evening market, or a sheet refused when it finally found signal the next day,
+   reached the database and no screen at all, while the seller's phone said Nawid
+   had it. Young's three refused Montclair sheets were visible for an hour. Now
+   the last two weeks are listed on Today, the same window as days never counted
+   up. They can't be marked done - a fix is never changed - so they drop off
+   when they're two weeks old. */
+let REAL_EARLIER = { fixes:[], seconds:[], days:{} }, REAL_EARLIER_OK = true;
+async function loadRealEarlier(today){
+  try{
+    const biz = "?business_id=eq." + encodeURIComponent(CLOUD.business);
+    const range = "&day_date=gte." + localDay(daysAgo(14)) + "&day_date=lt." + today;
+    const [f, s] = await Promise.all([
+      fetch(CLOUD.url + "/rest/v1/day_corrections" + biz + range
+        + "&select=id,market_id,day_date,seller_name,message,asked_at&order=day_date.desc,asked_at.asc", { headers: cloudHeaders() }),
+      fetch(CLOUD.url + "/rest/v1/second_sheets" + biz + range
+        + "&select=id,market_id,day_date,seller_name,sender_name,sheet,counts,refused_at&order=day_date.desc,refused_at.asc", { headers: cloudHeaders() })
+    ]);
+    if(!f.ok || !s.ok) throw new Error(f.status + "/" + s.status);
+    const fixes = await f.json(), seconds = await s.json();
+    // The sheet that was counted, for each second sheet to be compared with.
+    const days = {};
+    const slots = [...new Set(seconds.map(x => x.market_id + "|" + x.day_date))];
+    if(slots.length){
+      const or = slots.map(k => { const [m, d] = k.split("|"); return "and(market_id.eq." + m + ",day_date.eq." + d + ")"; }).join(",");
+      const r = await fetch(CLOUD.url + "/rest/v1/market_days" + biz + "&or=(" + encodeURIComponent(or) + ")"
+        + "&select=market_id,day_date,seller_name,cash,card,chips_sold,day_counts(went_out,came_back,samples,damaged)", { headers: cloudHeaders() });
+      if(!r.ok) throw new Error(String(r.status));
+      (await r.json()).forEach(row => { days[row.market_id + "|" + row.day_date] = row; });
+    }
+    REAL_EARLIER = { fixes, seconds, days }; REAL_EARLIER_OK = true;
+  }catch(e){
+    REAL_EARLIER = { fixes:[], seconds:[], days:{} }; REAL_EARLIER_OK = false;
   }
 }
 
@@ -1888,11 +1926,19 @@ function dayFromCloud(row, m){
     + (row.other_pays||[]).reduce((a,o)=>a+(Number(o.amount)||0),0)
     + Number(row.spent_from_till);
   const packMoney = gross - (row.chips_sold * CHIPS.price);
+  /* What the seller brought in - cash, card and other payments - the same
+     figure as "Brought in" on their own phone. Nawid's card and "Money in" used
+     to show the tamale money only, chips taken off and till spending put back,
+     under a label that said cash + card: Ali's Orinda card read $1,246 right
+     above Cash $410 and Square $860, and every Saturday looked short of the bag
+     by the chip sales. Tamale money is still what money per pack is worked on. */
+  const broughtIn = Number(row.cash) + Number(row.card)
+    + (row.other_pays||[]).reduce((a,o)=>a+(Number(o.amount)||0),0);
   const listPer = PRODUCTS.reduce((a,p)=>a+p.price,0)/PRODUCTS.length;
   const fixList = (REAL_FIXES[row.market_id] || []);
   return {
     name: row.seller_name || "Nobody assigned",
-    phone: null, sold, rev: Math.round(packMoney), out,
+    phone: null, sold, rev: broughtIn, out,
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
     overSend: 0, fixes: fixList.length, fixList, row,
@@ -3541,7 +3587,7 @@ function liveDay(plan){
     if(closed) status="Closed";
     else if(S.photo) status="Set up "+(S.arrivedAt||"");
     else if(openedTotal()>0) status="Loaded";
-    return { name:"You", phone:null, sold: closed?soldTotal():null, rev: closed?revenueTotal():null,
+    return { name:"You", phone:null, sold: closed?soldTotal():null, rev: closed?moneyIn():null,
              status, live:!closed && !!S.photo, perPack:null, fullPer:null, out:openedTotal(),
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: fixesForDay().length,
@@ -3599,10 +3645,12 @@ function secondSheetsBlock(d){
     return REAL_SECOND_OK ? "" : `<div class="card-pad" style="padding-top:0">
       <p class="note" style="font-size:12.5px">Could not check whether a second sheet was sent for this market.</p></div>`;
   }
-  const first = d.row || {};
-  const soldOf = counts => (counts || []).reduce((a,c) => a + Math.max(0,
-    (Number(c.went_out)||0) - (Number(c.came_back)||0) - (Number(c.samples)||0) - (Number(c.damaged)||0)), 0);
-  const firstSold = d.sold;
+  return compareSheets(list, d.row || {}, d.sold, false);
+}
+const soldOfCounts = counts => (counts || []).reduce((a,c) => a + Math.max(0,
+  (Number(c.went_out)||0) - (Number(c.came_back)||0) - (Number(c.samples)||0) - (Number(c.damaged)||0)), 0);
+function compareSheets(list, first, firstSold, withDay){
+  const soldOf = soldOfCounts;
   const cmp = (label, a, b, fmt) => {
     const differs = String(a) !== String(b);
     return `<div class="kv"><span class="kv-k">${label}</span>
@@ -3610,12 +3658,13 @@ function secondSheetsBlock(d){
   };
   return list.map(x => {
     const sh = x.sheet || {};
-    const when = new Date(x.refused_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+    const when = new Date(x.refused_at).toLocaleString(undefined, withDay
+      ? { weekday:"short", hour:"numeric", minute:"2-digit" } : { hour:"numeric", minute:"2-digit" });
     const who = x.seller_name || "A seller";
     const from = x.sender_name && x.sender_name !== x.seller_name ? ` &middot; sent from ${esc(x.sender_name)}'s phone` : "";
     return `<div class="card-pad stack-sm" style="padding-top:0">
       <div class="lbl" style="color:var(--bad)">A second sheet couldn't go in</div>
-      <p class="note" style="margin:0">${esc(who)}'s sheet for this market, refused at ${esc(when)} because one was already in${from}. Each line shows the counted sheet first, then this one; anything different is in red.</p>
+      <p class="note" style="margin:0">${esc(who)}'s sheet for this market, refused at ${esc(when)} because one was already in${from}. Each line shows ${first.seller_name ? esc(first.seller_name) + "'s" : "the"} counted sheet first, then this one; anything different is in red.</p>
       ${cmp("Items sold", firstSold, soldOf(x.counts), v => String(v))}
       ${cmp("Cash", Number(first.cash)||0, Number(sh.cash)||0, v => money2(v))}
       ${cmp("Square", Number(first.card)||0, Number(sh.card)||0, v => money2(v))}
@@ -3676,7 +3725,7 @@ function owner_market(mid){
       <div class="card-pad row" style="gap:26px">
         ${d.status==="Closed"
           ? `<div><div class="lbl">Packs</div><div class="mid" style="margin-top:5px">${d.sold}</div></div>
-             <div><div class="lbl">Money</div><div class="mid" style="margin-top:5px">${money(d.rev)}</div></div>`
+             <div><div class="lbl">Brought in</div><div class="mid" style="margin-top:5px">${money(d.rev)}</div></div>`
           : `<div><div class="lbl">Took out</div><div class="mid" style="margin-top:5px">${d.out||0}</div></div>
              <div><div class="lbl">Reports at</div><div class="mid" style="margin-top:5px">close</div></div>`}
         ${d.phone ? `<a class="btn btn-quiet btn-sm" href="sms:${esc(d.phone.replace(/[^0-9+]/g,""))}" style="margin-left:auto;text-decoration:none">Text ${esc(d.name.split(" ")[0])}</a>` : ""}
@@ -3759,6 +3808,43 @@ function owner_market(mid){
   </div>`;
 }
 
+/* Fixes asked for, and second sheets refused, on an earlier date - newest day
+   first. See loadRealEarlier. */
+function earlierNotices(){
+  if(AUTH.demo) return "";
+  const { fixes, seconds, days } = REAL_EARLIER;
+  if(!REAL_EARLIER_OK) return `<p class="note" style="font-size:12.5px">Couldn't check for fixes or second sheets from earlier days.</p>`;
+  if(!fixes.length && !seconds.length) return "";
+  const dayName = iso => new Date(iso + "T12:00:00").toLocaleDateString(undefined, { weekday:"long", month:"short", day:"numeric" });
+  const marketName = id => (mkt(id) || {}).name || id;
+  const slots = [];
+  fixes.forEach(f => { const k = f.day_date + "|" + f.market_id; if(!slots.includes(k)) slots.push(k); });
+  seconds.forEach(x => { const k = x.day_date + "|" + x.market_id; if(!slots.includes(k)) slots.push(k); });
+  slots.sort((a, b) => a < b ? 1 : a > b ? -1 : 0);
+  return `<h2 class="sec">From earlier days</h2>
+    <div class="stack-sm">${slots.map(k => {
+      const [date, mid] = k.split("|");
+      const fx = fixes.filter(f => f.day_date === date && f.market_id === mid);
+      const sx = seconds.filter(x => x.day_date === date && x.market_id === mid);
+      const first = days[mid + "|" + date];
+      return `<div class="card stripe stripe-warn">
+        <div class="card-pad stack-sm">
+          <div class="spread"><div><h3>${esc(marketName(mid))}</h3><div class="sub" style="margin-top:3px">${esc(dayName(date))}</div></div>
+            <span class="pill pill-warn">${[fx.length ? (fx.length === 1 ? "a fix" : fx.length + " fixes") : "", sx.length ? (sx.length === 1 ? "second sheet" : sx.length + " second sheets") : ""].filter(Boolean).join(" \u00B7 ")}</span></div>
+          ${fx.length ? `<div class="lbl" style="color:var(--bad)">${fx.length === 1 ? "A fix asked for" : fx.length + " fixes asked for"}</div>
+          ${fx.map(f => `<div class="hint" style="color:var(--ink)">
+            <div>${esc(f.message)}</div>
+            <div class="sub" style="margin-top:6px">${esc(f.seller_name || "A seller")} &middot; asked ${esc(new Date(f.asked_at).toLocaleString(undefined, { weekday:"short", hour:"numeric", minute:"2-digit" }))}</div>
+          </div>`).join("")}
+          <p class="note" style="font-size:12.5px">What was first sent for that day hasn't been changed.</p>` : ""}
+        </div>
+        ${sx.length ? (first
+          ? compareSheets(sx, first, soldOfCounts(first.day_counts), true)
+          : `<div class="card-pad" style="padding-top:0"><p class="note" style="font-size:12.5px">${sx.length === 1 ? "A second sheet" : sx.length + " second sheets"} came in for this day, but the counted sheet couldn't be read to compare.</p></div>`) : ""}
+      </div>`;
+    }).join("")}</div>`;
+}
+
 function owner_today(){
   const cards = TODAY_PLAN.map(plan=>{
     const m = mkt(plan.marketId);
@@ -3787,7 +3873,7 @@ function owner_today(){
       <div class="card-pad row" style="gap:26px">
         ${closed
           ? `<div><div class="lbl">Packs</div><div class="mid" style="margin-top:5px">${d.sold}</div></div>
-             <div><div class="lbl">Money</div><div class="mid" style="margin-top:5px">${money(d.rev)}</div></div>`
+             <div><div class="lbl">Brought in</div><div class="mid" style="margin-top:5px">${money(d.rev)}</div></div>`
           : `<div><div class="lbl">Took out</div><div class="mid" style="margin-top:5px">${d.out||0}</div></div>
              <div><div class="lbl">Reports at</div><div class="mid" style="margin-top:5px">close</div></div>`}
         <div style="margin-left:auto;text-align:right"><div class="lbl">Stall fee</div><div class="mid" style="margin-top:5px">${money(feeOf(m))}</div></div>
@@ -3821,7 +3907,7 @@ function owner_today(){
     </div>
     <div class="tiles">
       <div class="tile"><div class="lbl">Packs sold</div><div class="mid">${totSold}</div><div class="tile-sub">${nClosed} of ${nAll} closed</div></div>
-      <div class="tile"><div class="lbl">Money in</div><div class="mid">${money(totRev)}</div><div class="tile-sub">cash + card</div></div>
+      <div class="tile"><div class="lbl">Money in</div><div class="mid">${money(totRev)}</div><div class="tile-sub">cash, card &amp; other</div></div>
       <div class="tile"><div class="lbl">Stall fees</div><div class="mid">${money(fees)}</div><div class="tile-sub">${feesAreGuessed?`estimate &mdash; no real fees entered yet`:`${money(dayDriverPay)} driving on top`}</div></div>
       <div class="tile"><div class="lbl">Owed to crew</div><div class="mid">${money(owedCrew)}</div><div class="tile-sub">commission, driving, money fronted</div></div>
     </div>
@@ -3895,6 +3981,7 @@ function owner_today(){
         ${u.reporter_name && u.reporter_name !== u.seller_name ? `<p class="note" style="font-size:12.5px">Reported from ${esc(u.reporter_name)}'s phone, after it was handed over.</p>` : ""}
       </div>`;
     }).join("")}</div>` : ""}
+    ${earlierNotices()}
 
     <h2 class="sec">Markets</h2>
     <div class="stack-sm">${cards}</div>
