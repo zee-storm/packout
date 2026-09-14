@@ -1454,7 +1454,7 @@ function takePhone(newMe){
         secondSheetId: S.secondSheetId || null
       });
       if(!saveOutbox(list)){ S.me = owner; return false; }   // could not keep it: leave it with its owner
-    } else if(!S.submittedAt){
+    } else if(!S.submittedAt && !onlyLooked(S)){
       if(!shelveDay(S)){ S.me = owner; return false; }
     }
     const f = JSON.parse(JSON.stringify(BLANK));
@@ -1831,7 +1831,7 @@ async function loadRealUnfinished(){
     // Every unfinished day is its own day - two set aside for the same market
     // and date are two coolers that went out. A day taken back up and left
     // again keeps its id, so it is never listed twice.
-    REAL_UNFINISHED = rows.filter(r =>
+    REAL_UNFINISHED = rows.filter(r => !(r.reached === "today" && !r.packed_at)).filter(r =>
       !sent.some(x => x.market_id === r.market_id && x.day_date === r.day_date && x.seller_id === r.seller_id));
   }catch(e){ REAL_UNFINISHED = []; }
 }
@@ -2202,6 +2202,11 @@ function setAsideOldDay(){
 
   // Begun, never counted up, long abandoned: put aside, not deleted.
   if(S.archiveMe && !S.submittedAt){
+    if(onlyLooked(S)){                    // read the packing list, took nothing out
+      S = blank(); save();
+      MY_MARKET = marketOrAny(); MY_REC = recommendMarket(MY_MARKET.id);
+      return;
+    }
     const keep = Object.assign({}, S); delete keep.archiveMe;
     if(!shelveDay(keep)) return;          // could not keep it: leave it where it is
     S = blank(); save();
@@ -2223,10 +2228,21 @@ function setAsideOldDay(){
    day it was from the moment it was set aside - by the time it is reported,
    the phone may belong to somebody else.
    ========================================================= */
+/* Only looked. Pack the cooler opens the packing list and starts the day - so
+   a change there survives the app closing - but a seller who read the list and
+   tapped Back never took anything out. Set aside after twenty hours, or when the
+   phone changed hands, that read as "You packed 145 items and never counted
+   up", and Nawid was told to ask what happened to them: a rained-out market, or
+   someone else working it, turned into a false alarm about stock. The cooler
+   leaves at "Cooler is packed"; a day that never got that far is let go. */
+function onlyLooked(d){ return !!d && !d.packedAt && !d.submittedAt && (d.screen || "today") === "today"; }
+
 function loadShelf(){
   let list;
   try{ list = JSON.parse(localStorage.getItem(SHELF_KEY)); }catch(e){ return []; }
   if(!Array.isArray(list)) return [];
+  // Ones set aside before this was known.
+  if(list.some(e => onlyLooked(e.day))){ list = list.filter(e => !onlyLooked(e.day)); saveShelf(list); }
   // Days set aside before these were reported carry no id or owner. Give them
   // both once, from the day itself, so they can be counted up and reported too.
   let changed = false;
@@ -2336,7 +2352,7 @@ function unfinishedNotice(){
     const when = d.dayOf ? fmtDate(new Date(d.dayOf + "T12:00:00")) : "An earlier day";
     return `<div class="alert-card">
       <div class="spread"><div class="lbl">Never counted up</div><span class="pill pill-warn">${esc(name)}</span></div>
-      <div class="alert-title">You packed ${items} items and never counted up</div>
+      <div class="alert-title">${d.screen === "loadout" && !d.packedAt ? `You started packing ${items} items` : `You packed ${items} items`} and never counted up</div>
       <p class="note"><b>${esc(when)}</b> at ${esc(name)}. Count up what came back so the shop has the whole day.${e.reportedAt ? " Nawid has been told." : ""}</p>
       ${busy
         ? `<p class="note" style="font-size:12.5px">Finish and send the day you're on first, then count this one up.</p>`
@@ -3866,6 +3882,7 @@ function owner_today(){
       const when = new Date(u.day_date + "T12:00:00").toLocaleDateString(undefined, { weekday:"long", month:"short", day:"numeric" });
       const reached = u.reached === "closeout" ? "started counting up but never sent it"
                     : u.reached === "market" ? "set up at the market and never counted up"
+                    : u.reached === "loadout" && !u.packed_at ? "started packing, never tapped Cooler is packed, and never counted up"
                     : "packed the cooler and never counted up";
       const went = u.went_out || {};
       const flavours = PRODUCTS.filter(p => Number(went[p.id]) > 0)
