@@ -1243,6 +1243,7 @@ const BLANK = {
   travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
   packedBy:"you", showPacker:false, me:null, dayOf:null, marketId:null, startedAt:null, sentAt:null, sendError:null,
   submittedBy:null,              // who counted this day - it is sent under their name
+  dayOwner:null,                 // whose day this is, from the moment it began
   codeTyped:"", codeError:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
@@ -1369,13 +1370,60 @@ function beginDay(){
   S.startedAt = S.startedAt || Date.now();
   S.dayOf = todayStamp();
   S.marketId = m.id;
+  S.dayOwner = S.me;
+}
+
+/* The market to draw with: a day under way keeps its own market; otherwise
+   this person's market today. Worked out the same way on opening the app and
+   when somebody new takes the phone, so the two can never disagree. */
+function pickMyMarket(){ return (S.marketId && S.startedAt && mkt(S.marketId)) || marketOrAny(); }
+
+/* Somebody takes the phone.
+
+   "Not you?" is for handing the phone to somebody else, and signing out used
+   to leave the last person's day sitting on it. The next person signed in and
+   was shown that day as their own - somebody else's market, somebody else's
+   counts, under their name.
+
+   If the day on the phone belongs to someone else, it is dealt with first:
+   counted and not yet at the shop, it goes into the queue and is sent under
+   the name of the person who counted it; begun and never counted, it is set
+   aside. Then the new person starts clean. The same person signing back in -
+   after a sign-in stopped working - keeps their day exactly as it was. */
+function takePhone(newMe){
+  const owner = S.dayOwner || S.submittedBy || null;
+  if(owner && owner !== newMe && S.startedAt){
+    if(S.submittedAt && !S.sentAt && !AUTH.demo && AUTH.business){
+      const list = loadOutbox();
+      list.push({
+        id: newId(), business: AUTH.business,
+        payload: dayPayload(), counts: countRows(null),
+        market: (mkt(S.marketId) || {}).name || null, day: S.dayOf,
+        problem: S.sendError || null, parkedAt: new Date().toISOString(), sentAt: null
+      });
+      if(!saveOutbox(list)){ S.me = owner; return false; }   // could not keep it: leave it with its owner
+    } else if(!S.submittedAt){
+      try{
+        const shelf = JSON.parse(localStorage.getItem(SHELF_KEY) || "[]");
+        const copy = JSON.parse(JSON.stringify(S));
+        copy.photo = null; (copy.expenses || []).forEach(x => x.photo = null);
+        shelf.push({ setAsideAt: new Date().toISOString(), day: copy });
+        localStorage.setItem(SHELF_KEY, JSON.stringify(shelf.slice(-5)));
+      }catch(e){ S.me = owner; return false; }
+    }
+    const f = JSON.parse(JSON.stringify(BLANK));
+    f.mode = S.mode; f.tab = S.tab;
+    S = f;
+  }
+  S.me = newMe;
+  return true;
 }
 
 if(AUTH.person && !S.me){ S.me = AUTH.person; }
 /* The market a begun day belongs to, if there is one - an evening market
    counted after midnight, or a counted day still waiting for the shop, is
    still that market even though the calendar has moved on. */
-let MY_MARKET = (S.marketId && S.startedAt && mkt(S.marketId)) || marketOrAny();
+let MY_MARKET = pickMyMarket();
 let MY_REC = recommendMarket(MY_MARKET.id);
 
 /* =========================================================
@@ -1502,7 +1550,7 @@ async function resetTest(){
     localStorage.removeItem(OUTBOX_KEY);
     localStorage.removeItem(SHELF_KEY);
     S = JSON.parse(JSON.stringify(BLANK));
-    S.me = AUTH.person; S.dayOf = todayStamp(); S.startedAt = Date.now();
+    S.me = AUTH.person;
     save(); REAL_DAYS = null;
     toast(typeof d === "string" ? d : "Sandbox wiped");
     render(); window.scrollTo(0,0);
@@ -3500,17 +3548,100 @@ function syncFootSpace(){
 }
 
 
+/* Drawing the screen without throwing away what is already on it.
+
+   Every redraw used to replace the whole screen. The screen redraws when a
+   box loses focus - and tapping a button is what makes a box lose focus. So
+   the redraw ran in the middle of the tap, the button under the thumb was
+   swapped for a new one, and the tap landed on nothing. Worse, the new button
+   was often "Send it in": the seller tapped once, nothing happened, tapped
+   again, and sent a day they had not looked at. It swallowed first taps on
+   nearly every screen, and closed the keyboard when moving between boxes.
+
+   Now a redraw builds the new screen off to the side and brings the live one
+   into line with it: text and attributes are updated in place, and an element
+   is only replaced when it has actually become a different thing. A button
+   that is still the same button stays under the thumb and gets the tap. A box
+   that is being typed in is never touched. */
+const MORPH_KEYS = ["id","data-p","data-set","data-act","data-go","data-tab","data-market","data-me","data-exp","data-pay","data-expsrc","data-v","type"];
+function sameThing(a, b){
+  if(a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) return false;
+  return a.nodeType !== 1 || MORPH_KEYS.every(k => a.getAttribute(k) === b.getAttribute(k));
+}
+function morphInto(host, html){
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  morphChildren(host, t.content);
+}
+function morphChildren(from, to){
+  const next = [...to.childNodes];
+  let cur = from.firstChild;
+  for(const nb of next){
+    if(!cur){ from.appendChild(nb); continue; }
+    const after = cur.nextSibling;
+    if(sameThing(cur, nb)) morphNode(cur, nb);
+    else from.replaceChild(nb, cur);
+    cur = after;
+  }
+  while(cur){ const after = cur.nextSibling; from.removeChild(cur); cur = after; }
+}
+function morphNode(a, b){
+  if(a.nodeType !== 1){ if(a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+  for(const at of [...b.attributes]) if(a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
+  for(const at of [...a.attributes]) if(!b.hasAttribute(at.name)) a.removeAttribute(at.name);
+  const busy = a === document.activeElement;
+  const tag = a.nodeName;
+  if(tag === "INPUT"){
+    if(busy || a.type === "file") return;
+    if(a.type === "checkbox" || a.type === "radio") a.checked = b.hasAttribute("checked");
+    else { const v = b.getAttribute("value") ?? ""; if(a.value !== v) a.value = v; }
+    return;
+  }
+  if(tag === "TEXTAREA"){
+    if(!busy){ const v = b.textContent; if(a.value !== v) a.value = v; }
+    return;
+  }
+  if(tag === "SELECT"){
+    const opt = b.querySelector("option[selected]") || b.querySelector("option");
+    const want = opt ? (opt.getAttribute("value") ?? opt.textContent) : "";
+    morphChildren(a, b);
+    if(!busy && a.value !== want) a.value = want;
+    return;
+  }
+  morphChildren(a, b);
+}
+
+/* Which seller screen is showing, and its footer. */
+function sellerScreen(){
+  const enrolled = AUTH.person || AUTH.demo;
+  return !enrolled          ? [scr_whoami, null]
+       : !S.me              ? [scr_pickdemo, null]
+       : (!myMarketToday() && !dayInHand()) ? [scr_dayoff, null]
+       : (SELLER_SCREENS[S.screen] || SELLER_SCREENS.today);
+}
+const footHtml = ft => ft ? `<div class="sticky-foot"><div class="sticky-foot-in">${ft()}</div></div>` : "";
+
+/* The footer, kept current while typing. It says what is left to do; it used
+   to go on saying "1 left" after the last box was filled, until the box lost
+   focus - which was the very tap meant for the button. */
+function syncFooter(){
+  if(S.mode !== "seller") return;
+  const [, ft] = sellerScreen();
+  morphInto($("footHost"), footHtml(ft));
+  syncFootSpace();
+}
+
 function render(){
   const app = $("app"), foot = $("footHost"), tabs = $("tabsHost");
 
   /* Loud on purpose. The one thing a sandbox must never do is look like the
      real app - that is how a practice day ends up in the real books. */
   const th = $("testHost");
-  if(th) th.innerHTML = !TEST_MODE ? "" : `<div class="testbar">
+  if(th) morphInto(th, !TEST_MODE ? "" : `<div class="testbar">
       <span><b>TEST KITCHEN</b> &middot; nothing here is real${
         PRETEND_DAY ? ` &middot; pretending it is <b>${esc(DAY_FULL[PRETEND_DAY])}</b>` : ""}</span>
       <button data-act="test-reset">Wipe and start again</button>
-    </div>`;
+    </div>`);
   // Nobody lands on the owner screens without being an owner, however the
   // phone got there - an old saved state, or a tap from before this rule.
   if(S.mode==="owner" && !canSeeOwner()){ S.mode="seller"; S.marketOpen=null; }
@@ -3521,21 +3652,17 @@ function render(){
 
   if(S.mode==="owner"){
     app.className = "shell wide";
-    tabs.innerHTML = `<div class="tabs"><div class="tabs-in">${
+    morphInto(tabs, `<div class="tabs"><div class="tabs-in">${
       OWNER_TABS.map(([k,l])=>`<button data-tab="${k}" aria-pressed="${S.tab===k}">${l}</button>`).join("")
-    }</div></div>`;
-    app.innerHTML = S.marketOpen ? owner_market(S.marketOpen) : OWNER_SCREENS[S.tab]();
-    foot.innerHTML = "";
+    }</div></div>`);
+    morphInto(app, S.marketOpen ? owner_market(S.marketOpen) : OWNER_SCREENS[S.tab]());
+    morphInto(foot, "");
   } else {
     app.className = "shell";
-    tabs.innerHTML = "";
-    const enrolled = AUTH.person || AUTH.demo;
-    const [body, ft] = !enrolled          ? [scr_whoami, null]
-                     : !S.me              ? [scr_pickdemo, null]
-                     : (!myMarketToday() && !dayInHand()) ? [scr_dayoff, null]
-                     : (SELLER_SCREENS[S.screen] || SELLER_SCREENS.today);
-    app.innerHTML = body();
-    foot.innerHTML = ft ? `<div class="sticky-foot"><div class="sticky-foot-in">${ft()}</div></div>` : "";
+    morphInto(tabs, "");
+    const [body, ft] = sellerScreen();
+    morphInto(app, body());
+    morphInto(foot, footHtml(ft));
   }
   syncFootSpace();
   save();
@@ -3630,8 +3757,8 @@ document.addEventListener("click", e => {
     S.codeError = "Checking\u2026"; render();
     redeemCode(code).then(res => {
       if(res.ok){
-        S.me = AUTH.person; S.codeError = null; S.codeTyped = "";
-        MY_MARKET = marketOrAny(); MY_REC = recommendMarket(MY_MARKET.id);
+        takePhone(AUTH.person); S.codeError = null; S.codeTyped = "";
+        MY_MARKET = pickMyMarket(); MY_REC = recommendMarket(MY_MARKET.id);
         // A counted day still waiting to go up stays where it is, and goes now.
         const waiting = S.status === "closed" && S.submittedAt && !S.sentAt;
         if(!waiting) S.screen = "today";
@@ -3664,10 +3791,11 @@ document.addEventListener("click", e => {
   }
 
   if(t.dataset.me){
-    S.me = t.dataset.me;
-    MY_MARKET = marketOrAny();
+    const same = (S.dayOwner || S.submittedBy) === t.dataset.me;
+    takePhone(t.dataset.me);
+    MY_MARKET = pickMyMarket();
     MY_REC = recommendMarket(MY_MARKET.id);
-    S.screen = "today";
+    if(!same) S.screen = "today";
     render(); window.scrollTo(0,0); return;
   }
   if(t.dataset.act==="outbox-retry"){
@@ -3829,12 +3957,12 @@ document.addEventListener("input", e => {
   if(el.dataset.pay !== undefined){
     const row = S.otherPays[Number(el.dataset.pay)];
     if(row) row[el.dataset.f] = el.value;
-    save(); return;
+    save(); syncFooter(); return;
   }
   if(el.dataset.exp !== undefined){
     const row = S.expenses[Number(el.dataset.exp)];
     if(row) row[el.dataset.f] = el.value;
-    save(); return;
+    save(); syncFooter(); return;
   }
 
   const key = el.dataset.set;
@@ -3849,6 +3977,7 @@ document.addEventListener("input", e => {
     S[key] = el.value;
   }
   save();
+  syncFooter();
 });
 
 document.addEventListener("change", e => {
