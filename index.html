@@ -1008,6 +1008,28 @@ const dISO = d => d.toISOString().slice(0,10);
 const localDay = d => d.getFullYear() + "-" +
   String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0");
 
+/* The real calendar day this copy of the app opened on (not the sandbox's
+   pretend one). TODAY is settled once, on opening - and a phone keeps the app
+   alive in the background overnight. Brought back the next morning it still
+   said yesterday: stuck on yesterday's Day's done, "Nothing on today" on a
+   market day, or yesterday's market offered and a whole new day packed and
+   filed under yesterday's date and market. Once the date has moved on, the
+   app opens again from the top, the way a fresh open rolls the day over. */
+const OPENED_ON = localDay(new Date());
+function startOverIfNewDay(){
+  if(localDay(new Date()) === OPENED_ON) return false;
+  /* A day being worked - packed, at the market, mid-count - keeps its own date and
+     market; never pull it out from under someone typing. A counted day waiting for
+     signal isn't being typed into: starting over moves it to the queue. */
+  if(S.startedAt && !S.sentAt && !S.submittedAt && !onlyLooked(S)) return false;
+  /* Just counted and sent, still reading Day's done - Bahir sent his first real
+     day at 2:53am. Starting over then took the screen away within a minute of
+     tapping Send, which looks like the day being lost. By morning it goes. */
+  if(S.screen === "result" && S.endedAt && Date.now() - S.endedAt < 3 * 3600 * 1000) return false;
+  location.reload();
+  return true;
+}
+
 /* The day every screen and every send agrees on. Identical to the real date
    on a real phone; follows the pretend day inside the sandbox, so a test day
    is filed under the day it was pretending to be. */
@@ -1383,6 +1405,8 @@ function load(){
     const otherDay = !!merged.dayOf && merged.dayOf !== today;
 
     if(!begun) return startOver();            // nothing started: nothing kept, nothing stamped
+    // A look at an earlier day's packing list doesn't carry that day's market into today.
+    if(otherDay && onlyLooked(merged)) return startOver();
 
     if(merged.sentAt){
       // At the shop. Stays on screen until the date changes, so they can
@@ -4443,6 +4467,7 @@ document.addEventListener("click", e => {
   const go = t.dataset.go;
   if(go){
     if(go==="loadout"){
+      if(onlyLooked(S) && startOverIfNewDay()) return;   // never stamp yesterday on a new day
       beginDay();
       P_IDS.forEach(p=>{ if(S.opening[p]==null) S.opening[p]=MY_REC.byProduct[p].qty; });
     }
@@ -4863,9 +4888,14 @@ window.addEventListener("online", resendIfPending);
 // Coming back to the app after it sat in the background counts as opening it.
 document.addEventListener("visibilitychange", () => {
   if(document.hidden) return;
+  if(startOverIfNewDay()) return;                 // left open overnight
   if(storedRev() > SEEN_REV) takeOtherCopy();     // another copy moved on while this one slept
   resendIfPending();
 });
+
+window.addEventListener("pageshow", e => { if(e.persisted) startOverIfNewDay(); });
+// A screen left on across midnight, with nothing tapped.
+setInterval(() => { if(!document.hidden) startOverIfNewDay(); }, 60000);
 
 /* Another copy of the app on this phone saved something. Its day is taken the
    moment it lands, before this copy can be touched; see save(). Its sign-in is
