@@ -307,6 +307,16 @@ button{font-family:inherit;color:inherit}
 .stripe-warn{border-left-color:var(--warn)}
 .stripe-bad{border-left-color:var(--bad)}
 .stripe-live{border-left-color:var(--accent)}
+/* A day packed and never counted up. The one card on a seller's home screen
+   that must not be scrolled past or mistaken for a routine notice: it sits
+   above everything, in a colour nothing else on the seller's side uses. */
+.alert-card{
+  background:var(--ember-soft);border:1.5px solid var(--ember);border-left-width:6px;
+  border-radius:var(--r);padding:16px 16px 15px;display:flex;flex-direction:column;gap:10px;
+}
+.alert-card .lbl{color:var(--ember)}
+.alert-card .alert-title{font-family:var(--f-display);font-size:21px;font-weight:650;line-height:1.2;color:var(--ink)}
+.alert-card .note{color:var(--ink)}
 
 /* Small parts: translucent, never blurred — they sit on glass already. */
 .pill{
@@ -1246,6 +1256,8 @@ const BLANK = {
   travel:{ mode:"", legs:null, passenger:"", marketId:"", gasMode:"", gasAmount:"" },
   packedBy:"you", showPacker:false, me:null, dayOf:null, marketId:null, startedAt:null, sentAt:null, sendError:null,
   submittedBy:null,              // who counted this day - it is sent under their name
+  secondSheetId:null,            // if refused as a second sheet, the report that tells the shop
+  dayRowId:null,                 // a day taken back off the shelf: the id its sheet goes in under
   dayOwner:null,                 // whose day this is, from the moment it began
   codeTyped:"", codeError:null
 };
@@ -1409,17 +1421,13 @@ function takePhone(newMe){
         id: newId(), business: AUTH.business,
         payload: dayPayload(), counts: countRows(null),
         market: (mkt(S.marketId) || {}).name || null, day: S.dayOf,
-        problem: S.sendError || null, parkedAt: new Date().toISOString(), sentAt: null
+        problem: S.sendError || null, parkedAt: new Date().toISOString(), sentAt: null,
+        // Already reported as a second sheet: the queue must not report it again.
+        secondSheetId: S.secondSheetId || null
       });
       if(!saveOutbox(list)){ S.me = owner; return false; }   // could not keep it: leave it with its owner
     } else if(!S.submittedAt){
-      try{
-        const shelf = JSON.parse(localStorage.getItem(SHELF_KEY) || "[]");
-        const copy = JSON.parse(JSON.stringify(S));
-        copy.photo = null; (copy.expenses || []).forEach(x => x.photo = null);
-        shelf.push({ setAsideAt: new Date().toISOString(), day: copy });
-        localStorage.setItem(SHELF_KEY, JSON.stringify(shelf.slice(-5)));
-      }catch(e){ S.me = owner; return false; }
+      if(!shelveDay(S)){ S.me = owner; return false; }
     }
     const f = JSON.parse(JSON.stringify(BLANK));
     f.mode = S.mode; f.tab = S.tab;
@@ -1559,6 +1567,7 @@ async function resetTest(){
     localStorage.removeItem(FIX_KEY);
     localStorage.removeItem(OUTBOX_KEY);
     localStorage.removeItem(SHELF_KEY);
+    localStorage.removeItem(SECOND_KEY);
     S = JSON.parse(JSON.stringify(BLANK));
     S.me = AUTH.person;
     save(); REAL_DAYS = null;
@@ -1628,6 +1637,7 @@ const dayMarket = () => (S.marketId && mkt(S.marketId)) || null;
 function dayPayload(){
   const m = dayMarket() || MY_MARKET, who = me();
   return {
+    ...(S.dayRowId ? { id: S.dayRowId } : {}),
     business_id: CLOUD.business,
     market_id: m.id,
     market_name: m.name,
@@ -1739,6 +1749,8 @@ async function loadRealDays(){
     REAL_DAYS = {};
     rows.forEach(r => REAL_DAYS[r.market_id] = r);
     await loadRealFixes(today);
+    await loadRealUnfinished();
+    await loadRealSecondSheets(today);
     return true;
   }catch(e){
     REAL_DAYS = REAL_DAYS || {};      // an empty answer, not a broken screen
@@ -1746,10 +1758,59 @@ async function loadRealDays(){
   }
 }
 
+/* Days packed and never counted up in the last two weeks, minus any whose real
+   day has since arrived - once the seller counts it up and sends it, it stops
+   being unfinished. If either question cannot be answered, nothing is listed:
+   a wrong list here would point at somebody for nothing. */
+let REAL_UNFINISHED = [];
+async function loadRealUnfinished(){
+  try{
+    const since = localDay(daysAgo(14));
+    const u = await fetch(CLOUD.url + "/rest/v1/unfinished_days"
+      + "?business_id=eq." + encodeURIComponent(CLOUD.business)
+      + "&day_date=gte." + since
+      + "&select=id,market_id,market_name,day_date,seller_id,seller_name,went_out,items_out,packed_at,reached,set_aside_at,reporter_name"
+      + "&order=day_date.desc", { headers: cloudHeaders() });
+    if(!u.ok) throw new Error(String(u.status));
+    const rows = await u.json();
+    if(!rows.length){ REAL_UNFINISHED = []; return; }
+    const s = await fetch(CLOUD.url + "/rest/v1/market_days"
+      + "?business_id=eq." + encodeURIComponent(CLOUD.business)
+      + "&day_date=gte." + since + "&select=market_id,day_date,seller_id", { headers: cloudHeaders() });
+    if(!s.ok) throw new Error(String(s.status));
+    const sent = await s.json();
+    // Every unfinished day is its own day - two set aside for the same market
+    // and date are two coolers that went out. A day taken back up and left
+    // again keeps its id, so it is never listed twice.
+    REAL_UNFINISHED = rows.filter(r =>
+      !sent.some(x => x.market_id === r.market_id && x.day_date === r.day_date && x.seller_id === r.seller_id));
+  }catch(e){ REAL_UNFINISHED = []; }
+}
+
 /* Fixes sellers have asked for on today's days, keyed by market. Fetched on
    its own rather than folded into the days: if the corrections table is not
    there yet, the days must still show. REAL_FIXES_OK says whether we could
    actually look, so an empty list is never mistaken for "nobody asked". */
+/* Second sheets: sheets refused because the market already had one that day,
+   keyed by market. REAL_SECOND_OK says whether we could look at all. */
+let REAL_SECOND = {}, REAL_SECOND_OK = false;
+async function loadRealSecondSheets(day){
+  try{
+    const res = await fetch(CLOUD.url + "/rest/v1/second_sheets"
+      + "?business_id=eq." + encodeURIComponent(CLOUD.business)
+      + "&day_date=eq." + encodeURIComponent(day)
+      + "&select=id,market_id,seller_name,sender_name,sheet,counts,refused_at&order=refused_at.asc",
+      { headers: cloudHeaders() });
+    if(!res.ok) throw new Error(String(res.status));
+    const rows = await res.json();
+    REAL_SECOND = {};
+    rows.forEach(r => (REAL_SECOND[r.market_id] ||= []).push(r));
+    REAL_SECOND_OK = true;
+  }catch(e){
+    REAL_SECOND = {}; REAL_SECOND_OK = false;
+  }
+}
+
 let REAL_FIXES = {}, REAL_FIXES_OK = false;
 async function loadRealFixes(day){
   try{
@@ -1786,6 +1847,7 @@ function dayFromCloud(row, m){
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
     overSend: 0, fixes: fixList.length, fixList, row,
+    seconds: REAL_SECOND[row.market_id] || [],
     // Pay, plus whatever they fronted, drove or were given for gas. None of
     // those are sales, so none counts towards commission - they are owed on top.
     // A day sent before db/025 has no travel columns and adds nothing, as before.
@@ -1821,6 +1883,8 @@ async function dayAlreadyThere(){
        require the cash and card to match exactly, so a seller who corrected a
        figure after a failed send had their own day called somebody else's. */
     dayAlreadyThere.id = row.id;
+    // A day taken back off the shelf is ours only if it is this very sheet.
+    if(S.dayRowId) return row.id === S.dayRowId;
     return row.seller_id === (S.submittedBy || S.me);
   }catch(e){ return null; }
 }
@@ -1886,7 +1950,10 @@ async function sendDay(){
       }
       if(mine === false){
         S.sendError = "clash";
+        // Tell the shop there's a second sheet, rather than rely on the seller.
+        S.secondSheetId = queueSecondSheet(dayPayload(), countRows(null), S.secondSheetId) || S.secondSheetId;
         save();
+        sendSecondSheets().then(() => render());
         return "clash";
       }
       throw new Error("day 409");        // could not tell - treat as not sent
@@ -2059,7 +2126,10 @@ function setAsideOldDay(){
       counts: countRows(null),
       market: MY_MARKET.name, day: S.dayOf,
       problem: S.sendError || null,
-      parkedAt: new Date().toISOString(), sentAt: null
+      parkedAt: new Date().toISOString(), sentAt: null,
+      /* Already reported as a second sheet, it keeps that report. Without it the
+         queue sent Nawid the same second sheet again under a new id. */
+      secondSheetId: S.secondSheetId || null
     });
     // Only move on once it is safely in the queue. If this phone cannot hold
     // it, the waiting day stays on screen rather than being lost.
@@ -2071,16 +2141,147 @@ function setAsideOldDay(){
 
   // Begun, never counted up, long abandoned: put aside, not deleted.
   if(S.archiveMe && !S.submittedAt){
-    try{
-      const shelf = JSON.parse(localStorage.getItem(SHELF_KEY) || "[]");
-      const copy = JSON.parse(JSON.stringify(S));
-      copy.photo = null; (copy.expenses || []).forEach(x => x.photo = null);
-      shelf.push({ setAsideAt: new Date().toISOString(), day: copy });
-      localStorage.setItem(SHELF_KEY, JSON.stringify(shelf.slice(-5)));
-    }catch(e){ return; }                  // could not keep it: leave it where it is
+    const keep = Object.assign({}, S); delete keep.archiveMe;
+    if(!shelveDay(keep)) return;          // could not keep it: leave it where it is
     S = blank(); save();
     MY_MARKET = marketOrAny(); MY_REC = recommendMarket(MY_MARKET.id);
   }
+}
+
+/* =========================================================
+   Days packed and never counted up
+
+   A seller taps Pack the cooler, takes 148 items out, and never counts up -
+   forgot, the phone died, somebody else took the phone. The day is set aside,
+   not deleted. It used to sit here where nobody could see it: the seller was
+   never reminded, and Nawid never learned the stock went out.
+
+   Now both hear about it. The seller gets a card on their home screen and can
+   count it up; the shop gets a report (db/026) so Nawid's screen can list it
+   until the real day arrives. Each set-aside day keeps the business and whose
+   day it was from the moment it was set aside - by the time it is reported,
+   the phone may belong to somebody else.
+   ========================================================= */
+function loadShelf(){
+  let list;
+  try{ list = JSON.parse(localStorage.getItem(SHELF_KEY)); }catch(e){ return []; }
+  if(!Array.isArray(list)) return [];
+  // Days set aside before these were reported carry no id or owner. Give them
+  // both once, from the day itself, so they can be counted up and reported too.
+  let changed = false;
+  list.forEach(e => {
+    if(!e.id){ e.id = newId(); changed = true; }
+    if(!e.owner && e.day){ e.owner = e.day.dayOwner || e.day.me || null; changed = true; }
+    if(!("reportedAt" in e)){ e.reportedAt = null; changed = true; }
+  });
+  if(changed) saveShelf(list);
+  return list;
+}
+function saveShelf(list){
+  try{ localStorage.setItem(SHELF_KEY, JSON.stringify(list)); return true; }
+  catch(e){ return false; }
+}
+function shelveDay(day){
+  const copy = JSON.parse(JSON.stringify(day));
+  copy.photo = null; (copy.expenses || []).forEach(x => { x.photo = null; });
+  // A day taken back up and left again keeps its id, so the shop hears once.
+  const id = copy.shelfId || newId();
+  const list = loadShelf().filter(e => e.id !== id);
+  list.push({ id, business: AUTH.business || null, owner: copy.dayOwner || copy.me || null,
+              setAsideAt: new Date().toISOString(), day: copy, reportedAt: null, problem: null });
+  // Only ever trim days the shop already knows about. It used to keep the last
+  // five, whatever they were.
+  while(list.length > 10){
+    const i = list.findIndex(e => e.reportedAt);
+    if(i < 0) break;
+    list.splice(i, 1);
+  }
+  if(!saveShelf(list)) return false;
+  setTimeout(() => { sendUnfinished().then(() => { try{ render(); }catch(e){} }); }, 0);
+  return true;
+}
+
+function sendUnfinished(){
+  if(AUTH.demo || !AUTH.business) return Promise.resolve();
+  if(sendUnfinished.busy) return sendUnfinished.busy.then(() => sendUnfinished());
+  sendUnfinished.busy = sendUnfinishedNow().catch(() => {}).then(() => { sendUnfinished.busy = null; });
+  return sendUnfinished.busy;
+}
+async function sendUnfinishedNow(){
+  const due = loadShelf().filter(e => !e.reportedAt && e.day && e.day.marketId && e.day.dayOf
+                                   && (e.business || AUTH.business) === AUTH.business);
+  if(!due.length) return;
+  await ensureSession();
+  if(AUTH.signinBroken) return;
+  for(const e of due){
+    const d = e.day, m = mkt(d.marketId);
+    const owner = e.owner || d.dayOwner || d.me || null, who = owner ? slr(owner) : null;
+    const out = {}; let items = 0;
+    Object.keys(d.opening || {}).forEach(p => { const k = Number(d.opening[p]) || 0; if(k > 0){ out[p] = k; items += k; } });
+    const packer = (!d.packedBy || d.packedBy === "you") ? (who ? who.name : null) : ((slr(d.packedBy) || {}).name || null);
+    let problem = null, ok = false;
+    try{
+      const res = await fetch(CLOUD.url + "/rest/v1/unfinished_days", {
+        method:"POST", headers: cloudHeaders({ "Prefer":"return=minimal" }),
+        body: JSON.stringify({ id:e.id, business_id:AUTH.business, market_id:d.marketId,
+          market_name: m ? m.name : d.marketId, day_date:d.dayOf,
+          seller_id:owner, seller_name: who ? who.name : null,
+          went_out:out, items_out:items, packed_by:packer,
+          packed_at:d.packedAt || null, booth_up_at:d.arrivedAt || null,
+          reached:d.screen || null, set_aside_at:e.setAsideAt })
+      });
+      if(res.ok) ok = true;
+      else {
+        const x = await res.json().catch(() => ({}));
+        if(x.code === "23505") ok = true;                                   // this very report is already there
+        else if(res.status === 404 || x.code === "PGRST205" || x.code === "42P01") problem = "notready";  // db/026 not run yet
+        else problem = "failed";
+      }
+    }catch(err){ problem = "nosignal"; }
+    const list = loadShelf();
+    const item = list.find(x => x.id === e.id);
+    if(item){ Object.assign(item, ok ? { reportedAt:new Date().toISOString(), problem:null } : { problem }); saveShelf(list); }
+  }
+}
+
+/* The seller's card for a day of theirs that was never counted up. Only their
+   own days - a handed-over phone also holds the last person's - and "count it
+   up now" only when no other day is in hand, so an old day can never wipe
+   today's count. Never says the shop knows until the shop has it. */
+/* A set-aside day for the same person, market and date as the day this phone
+   has now sent is superseded: the shop has that sheet, and counting the old one
+   up would only run into it (one sheet per market per day). Dropped - but only
+   once the shop has also been told about it, so nothing goes unrecorded. */
+function pruneShelf(){
+  if(!S.sentAt || !S.marketId || !S.dayOf) return;
+  const who = S.dayOwner || S.submittedBy || S.me;
+  const list = loadShelf();
+  const keep = list.filter(e => !(e.reportedAt && e.day && e.day.marketId === S.marketId
+    && e.day.dayOf === S.dayOf && (e.owner || e.day.dayOwner || e.day.me) === who));
+  if(keep.length !== list.length) saveShelf(keep);
+}
+
+function unfinishedNotice(){
+  if(AUTH.demo || !S.me) return "";
+  pruneShelf();
+  const mine = loadShelf().filter(e => e.day && e.day.marketId
+    && (e.owner || e.day.dayOwner || e.day.me) === S.me
+    && (!e.business || e.business === AUTH.business));
+  if(!mine.length) return "";
+  const busy = !!S.startedAt && !S.sentAt;
+  return mine.map(e => {
+    const d = e.day, m = mkt(d.marketId), name = m ? m.name : "your market";
+    const items = Object.values(d.opening || {}).reduce((a, v) => a + (Number(v) || 0), 0);
+    const when = d.dayOf ? fmtDate(new Date(d.dayOf + "T12:00:00")) : "An earlier day";
+    return `<div class="alert-card">
+      <div class="spread"><div class="lbl">Never counted up</div><span class="pill pill-warn">${esc(name)}</span></div>
+      <div class="alert-title">You packed ${items} items and never counted up</div>
+      <p class="note"><b>${esc(when)}</b> at ${esc(name)}. Count up what came back so the shop has the whole day.${e.reportedAt ? " Nawid has been told." : ""}</p>
+      ${busy
+        ? `<p class="note" style="font-size:12.5px">Finish and send the day you're on first, then count this one up.</p>`
+        : `<button class="btn" data-act="shelf-resume" data-shelf="${esc(e.id)}">Count it up now</button>`}
+    </div>`;
+  }).join("");
 }
 
 function sendOutbox(){
@@ -2102,7 +2303,8 @@ async function sendOutboxNow(){
         let dayId = null;
         if(res.status === 403 || (res.status === 401 && AUTH.signinBroken)) problem = "signin";
         else if(res.status === 409){
-          // Already there. Ours only if it was sent under the same name.
+          // Already there. Ours only if it was sent under the same name - or,
+          // for a day taken back off the shelf, only if it is this very sheet.
           const g = await fetch(CLOUD.url + "/rest/v1/market_days"
             + "?business_id=eq." + encodeURIComponent(e.payload.business_id)
             + "&market_id=eq."   + encodeURIComponent(e.payload.market_id)
@@ -2111,8 +2313,13 @@ async function sendOutboxNow(){
           if(!g.ok) problem = "failed";
           else {
             const rows = await g.json();
-            if(rows.length && rows[0].seller_id === e.payload.seller_id) dayId = rows[0].id;
-            else problem = "clash";
+            const ours = rows.length && (e.payload.id ? rows[0].id === e.payload.id
+                                                      : rows[0].seller_id === e.payload.seller_id);
+            if(ours) dayId = rows[0].id;
+            else {
+              problem = "clash";
+              e.secondSheetId = queueSecondSheet(e.payload, e.counts, e.secondSheetId) || e.secondSheetId;
+            }
           }
         }
         else if(res.ok) dayId = (await res.json())[0].id;
@@ -2133,8 +2340,13 @@ async function sendOutboxNow(){
     }catch(x){ problem = "nosignal"; }
     const list = loadOutbox();
     const item = list.find(x => x.id === e.id);
-    if(item){ Object.assign(item, ok ? { sentAt:new Date().toISOString(), problem:null } : { problem }); saveOutbox(list); }
+    if(item){
+      Object.assign(item, ok ? { sentAt:new Date().toISOString(), problem:null } : { problem });
+      if(e.secondSheetId) item.secondSheetId = e.secondSheetId;
+      saveOutbox(list);
+    }
   }
+  if(loadSecondSheets().some(x => !x.sentAt && !x.closed)) await sendSecondSheets();
 }
 
 /* A sign-in the server has already refused. It used to surface only after the
@@ -2144,9 +2356,9 @@ function signinNotice(){
   if(AUTH.demo || !AUTH.person || !AUTH.signinBroken) return "";
   if(waitingDays().some(e => e.problem === "signin")) return "";   // the waiting-day card already says it
   return `<div class="card card-pad stack-sm stripe stripe-warn">
-      <div class="lbl">Sign in again before you start</div>
-      <p class="note">This phone's sign-in has stopped working, so it can't send anything to the shop. Ask Nawid for a new code now &mdash; you can still count your day, and it goes up as soon as you're back in.</p>
-      <button class="btn" data-act="resignin">I have a new code</button>
+      <div class="lbl">Your code has stopped working</div>
+      <p class="note">The shop has stopped accepting this phone &mdash; it was taken off the shop's list, or its sign-in ran out. <b>It isn't your signal.</b> Nothing can reach the shop until you type in a new code, so get one from Nawid before you start. You can still count your day; it goes up as soon as the new code is in.</p>
+      <button class="btn" data-act="resignin">Type a new code</button>
     </div>`;
 }
 
@@ -2159,17 +2371,92 @@ function outboxNotice(){
   return list.map(e => {
     const when = e.day ? fmtDate(new Date(e.day + "T12:00:00")) : "An earlier day";
     const why = e.problem === "signin"
-      ? "This phone's sign-in has stopped working, so it can't send. It's saved and nothing is lost. Ask Nawid for a new code."
+      ? "Your code has stopped working on this phone, so it can't be sent. It isn't your signal. It's saved here - get a new code from Nawid."
       : e.problem === "clash"
-      ? "Another day is already logged for that market and date. It's saved on this phone. Tell Nawid."
+      ? ((secondSheetWith(e.secondSheetId) || {}).sentAt
+          ? "Another day is already logged for that market and date. Nawid can see this sheet next to it."
+          : "Another day is already logged for that market and date. It's saved on this phone. Tell Nawid.")
       : "It's saved on this phone and keeps trying on its own. Nothing is lost.";
     return `<div class="card card-pad stack-sm stripe stripe-warn">
       <div class="spread"><div class="lbl">Not at the shop yet</div><span class="pill pill-warn">${esc(e.market || "Market")}</span></div>
       <p class="note"><b>${esc(when)}</b> at ${esc(e.market || "your market")} hasn't reached the shop. ${why}</p>
     </div>`;
   }).join("") + (signin
-    ? `<button class="btn" data-act="resignin">I have a new code</button>`
+    ? `<button class="btn" data-act="resignin">Type a new code</button>`
     : `<button class="btn btn-quiet btn-sm" data-act="outbox-retry">Try sending again</button>`);
+}
+
+/* =========================================================
+   A second sheet for a market that already has one
+
+   One sheet per market per day is refused on purpose - a day must never be
+   counted twice. But the refused sheet used to stay on that seller's phone,
+   and the only way Nawid heard about it was the seller remembering to tell
+   him. Now it is sent on its own to the shop, kept apart from the day already
+   in, and shown to Nawid on that market's page to compare.
+
+   Queued first, sent second, with an id made here so a retry can never make
+   two. The day itself stays exactly where it is on the phone.
+   ========================================================= */
+const SECOND_KEY = "packout.secondsheets.v1";
+
+function loadSecondSheets(){
+  try{ const r = JSON.parse(localStorage.getItem(SECOND_KEY)); return Array.isArray(r) ? r : []; }
+  catch(e){ return []; }
+}
+function saveSecondSheets(list){
+  try{ localStorage.setItem(SECOND_KEY, JSON.stringify(list)); return true; }
+  catch(e){ return false; }
+}
+function queueSecondSheet(payload, counts, id){
+  const list = loadSecondSheets();
+  if(id && list.some(x => x.id === id)) return id;
+  id = id || newId();
+  list.push({
+    id, business_id: payload.business_id, market_id: payload.market_id, day_date: payload.day_date,
+    seller_id: payload.seller_id || null, seller_name: payload.seller_name || null,
+    sheet: payload,
+    counts: (counts || []).map(c => ({ product_id:c.product_id, product_name:c.product_name,
+                                       went_out:c.went_out, came_back:c.came_back,
+                                       samples:c.samples, damaged:c.damaged })),
+    refused_at: new Date().toISOString(), sentAt: null, problem: null
+  });
+  return saveSecondSheets(list) ? id : null;
+}
+const secondSheetWith = id => id ? loadSecondSheets().find(x => x.id === id) || null : null;
+
+function sendSecondSheets(){
+  if(AUTH.demo || !AUTH.business) return Promise.resolve();
+  if(sendSecondSheets.busy) return sendSecondSheets.busy.then(() => sendSecondSheets());
+  sendSecondSheets.busy = sendSecondSheetsNow().catch(() => {}).then(() => { sendSecondSheets.busy = null; });
+  return sendSecondSheets.busy;
+}
+async function sendSecondSheetsNow(){
+  const due = loadSecondSheets().filter(x => !x.sentAt && !x.closed && x.business_id === AUTH.business);
+  if(!due.length) return;
+  await ensureSession();
+  for(const x of due){
+    let changes;
+    try{
+      const res = await fetch(CLOUD.url + "/rest/v1/second_sheets", {
+        method:"POST", headers: cloudHeaders({ "Prefer":"return=minimal" }),
+        body: JSON.stringify({ id:x.id, business_id:x.business_id, market_id:x.market_id, day_date:x.day_date,
+                               seller_id:x.seller_id, seller_name:x.seller_name,
+                               sheet:x.sheet, counts:x.counts, refused_at:x.refused_at })
+      });
+      if(res.ok) changes = { sentAt:new Date().toISOString(), problem:null };
+      else {
+        const d = await res.json().catch(() => ({}));
+        if(d.code === "23505") changes = { sentAt:new Date().toISOString(), problem:null };   // already there
+        else if(d.code === "23503") changes = { closed:true, problem:"noday" };  // no day in that slot any more
+        else if(res.status === 404 || d.code === "PGRST205" || d.code === "42P01") changes = { problem:"notready" };
+        else changes = { problem:"failed" };
+      }
+    }catch(e){ changes = { problem:"nosignal" }; }
+    const list = loadSecondSheets();
+    const item = list.find(y => y.id === x.id);
+    if(item){ Object.assign(item, changes); saveSecondSheets(list); }
+  }
 }
 
 function markFix(id, changes){
@@ -2400,6 +2687,7 @@ function scr_dayoff(){
   const next = MARKETS.filter(m => m.crew.includes(S.me))
     .map(m => DAY_FULL[m.day] + " at " + m.name);
   return `<div class="pad stack">
+    ${unfinishedNotice()}
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">Nothing on today</h1>
@@ -2444,6 +2732,7 @@ function scr_today(){
 
   return `
   <div class="pad stack">
+    ${unfinishedNotice()}
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
@@ -3027,7 +3316,7 @@ function scr_result(){
 
     <div class="card card-pad stack-sm stripe stripe-${S.sentAt || AUTH.demo ? "good" : "warn"}">
       <div class="spread">
-        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : S.sendError === "signin" ? "This phone needs signing in again" : S.sendError === "clash" ? "Could not go in yet" : "Waiting for signal"}</div>
+        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : S.sendError === "signin" ? "Your code has stopped working" : S.sendError === "clash" ? "Could not go in yet" : "Waiting for signal"}</div>
         ${S.sentAt || AUTH.demo || S.sendError === "signin" ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
       </div>
       <p class="note">${AUTH.demo
@@ -3035,12 +3324,14 @@ function scr_result(){
         : S.sentAt
         ? "Nawid has this day. The counts, the money and your notes went up on their own \u2014 nobody has to retype anything."
         : S.sendError === "signin"
-        ? "Your day is saved on this phone and nothing is lost. The phone's sign-in has stopped working, so it cannot send \u2014 more signal will not fix it. Ask Nawid for a new code, then tap the button below. Your day goes up by itself the moment you are back in, under your name."
+        ? "Your day is saved on this phone. The shop has stopped accepting this phone \u2014 it was taken off the shop's list, or its sign-in ran out. It isn't your signal, and waiting won't fix it. Get a new code from Nawid and type it in with the button below; your day goes up by itself, under your name."
+        : S.sendError === "clash" && (secondSheetWith(S.secondSheetId) || {}).sentAt
+        ? "A different day is already logged for this market on that date, so yours couldn't go in as the day. Nawid can see your sheet next to that one, and will sort out which is right. Nothing you did is wrong, and your counts are safe on this phone."
         : S.sendError === "clash"
-        ? "A different day is already logged for this market today, so yours could not go in. Nothing you did is wrong and nothing is lost \u2014 your counts are safe on this phone. Tell Nawid, and tap Try again once he says it is clear."
+        ? "A different day is already logged for this market on that date, so yours could not go in. Nothing you did is wrong and nothing is lost \u2014 your counts are safe on this phone. Tell Nawid, and tap Try again once he says it is clear."
         : "Saved on your phone. It goes on its own as soon as you have signal, even if you close the app. Nothing is lost."}</p>
       ${S.sendError === "signin" && !S.sentAt && !AUTH.demo
-        ? `<button class="btn" data-act="resignin" style="margin-top:4px">I have a new code</button>` : ""}
+        ? `<button class="btn" data-act="resignin" style="margin-top:4px">Type a new code</button>` : ""}
       <div class="chips" style="margin-top:4px">
         ${WENT_OUT().map(pid=>`<span class="chip">${esc(prod(pid).short)} ${soldByCount(pid)} sold \u00B7 ${S.closing[pid]||0} back</span>`).join("")}
       </div>
@@ -3167,6 +3458,41 @@ function liveDay(plan){
            owed: done ? dayPay(plan.sellerId, rev, plan.marketId).amount : 0 };
 }
 
+/* A sheet the database refused because this market already had one today,
+   laid out next to the one that was counted. Nawid decides which is right;
+   nothing here changes the day. */
+function secondSheetsBlock(d){
+  const list = d.seconds || [];
+  if(!list.length){
+    return REAL_SECOND_OK ? "" : `<div class="card-pad" style="padding-top:0">
+      <p class="note" style="font-size:12.5px">Could not check whether a second sheet was sent for this market.</p></div>`;
+  }
+  const first = d.row || {};
+  const soldOf = counts => (counts || []).reduce((a,c) => a + Math.max(0,
+    (Number(c.went_out)||0) - (Number(c.came_back)||0) - (Number(c.samples)||0) - (Number(c.damaged)||0)), 0);
+  const firstSold = d.sold;
+  const cmp = (label, a, b, fmt) => {
+    const differs = String(a) !== String(b);
+    return `<div class="kv"><span class="kv-k">${label}</span>
+      <span class="kv-v">${fmt(a)} <span class="sub">&middot; this sheet</span> <b style="${differs ? "color:var(--bad)" : ""}">${fmt(b)}</b></span></div>`;
+  };
+  return list.map(x => {
+    const sh = x.sheet || {};
+    const when = new Date(x.refused_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+    const who = x.seller_name || "A seller";
+    const from = x.sender_name && x.sender_name !== x.seller_name ? ` &middot; sent from ${esc(x.sender_name)}'s phone` : "";
+    return `<div class="card-pad stack-sm" style="padding-top:0">
+      <div class="lbl" style="color:var(--bad)">A second sheet couldn't go in</div>
+      <p class="note" style="margin:0">${esc(who)}'s sheet for this market, refused at ${esc(when)} because one was already in${from}. Each line shows the counted sheet first, then this one; anything different is in red.</p>
+      ${cmp("Items sold", firstSold, soldOf(x.counts), v => String(v))}
+      ${cmp("Cash", Number(first.cash)||0, Number(sh.cash)||0, v => money2(v))}
+      ${cmp("Square", Number(first.card)||0, Number(sh.card)||0, v => money2(v))}
+      ${cmp("Chips sold", Number(first.chips_sold)||0, Number(sh.chips_sold)||0, v => String(v))}
+      <p class="note" style="font-size:12.5px">The first sheet is the one counted. If this one is right instead, sort it out with ${esc(who)}.</p>
+    </div>`;
+  }).join("");
+}
+
 function owner_market(mid){
   const m = mkt(mid);
   const days = HISTORY.filter(d=>d.marketId===mid);
@@ -3253,7 +3579,8 @@ function owner_market(mid){
           <p class="note" style="font-size:12.5px">The numbers above are what was first sent. Nothing has been changed.</p>
         </div>` : !REAL_FIXES_OK ? `<div class="card-pad" style="padding-top:0">
           <p class="note" style="font-size:12.5px">Could not check whether ${esc(d.name)} asked for anything to be fixed.</p>
-        </div>` : ""}`;
+        </div>` : ""}
+        ${secondSheetsBlock(d)}`;
       })() : ""}
     </div>` : ""}
 
@@ -3333,7 +3660,8 @@ function owner_today(){
              <div><div class="lbl">Reports at</div><div class="mid" style="margin-top:5px">close</div></div>`}
         <div style="margin-left:auto;text-align:right"><div class="lbl">Stall fee</div><div class="mid" style="margin-top:5px">${money(feeOf(m))}</div></div>
       </div>
-      ${(d.overSend || d.fixes || d.packedByOther) ? `<div class="card-pad" style="padding-top:0"><div class="chips">
+      ${(d.overSend || d.fixes || d.packedByOther || (d.seconds && d.seconds.length)) ? `<div class="card-pad" style="padding-top:0"><div class="chips">
+        ${d.seconds && d.seconds.length ? `<span class="chip chip-hi" style="color:var(--bad)">${d.seconds.length === 1 ? "A second sheet" : d.seconds.length + " more sheets"} came in &mdash; tap to compare</span>` : ""}
         ${d.overSend ? `<span class="chip chip-hi">took ${d.overSend>0?"+":"\u2212"}${Math.abs(d.overSend)} vs send list</span>` : ""}
         ${d.fixes ? `<span class="chip chip-hi" style="color:var(--bad)">${d.fixes} fix${d.fixes===1?"":"es"} asked &mdash; tap to read</span>` : ""}
         ${d.packedByOther ? `<span class="chip chip-hi">cooler packed by ${esc(d.packedByOther)}</span>` : ""}
@@ -3415,6 +3743,25 @@ function owner_today(){
         crew's phones is not built yet, so for anything they need today, text them.</div>
       </div>
     </div>
+
+    ${REAL_UNFINISHED.length ? `<h2 class="sec">Packed but never counted up</h2>
+    <div class="stack-sm">${REAL_UNFINISHED.map(u => {
+      const n = Number(u.items_out) || 0, who = u.seller_name || "The seller";
+      const when = new Date(u.day_date + "T12:00:00").toLocaleDateString(undefined, { weekday:"long", month:"short", day:"numeric" });
+      const reached = u.reached === "closeout" ? "started counting up but never sent it"
+                    : u.reached === "market" ? "set up at the market and never counted up"
+                    : "packed the cooler and never counted up";
+      const went = u.went_out || {};
+      const flavours = PRODUCTS.filter(p => Number(went[p.id]) > 0)
+        .map(p => `<span class="chip">${esc(p.short)} ${Number(went[p.id])}</span>`).join("");
+      return `<div class="card card-pad stack-sm stripe stripe-warn">
+        <div class="spread"><div><h3>${esc(u.market_name)}</h3><div class="sub" style="margin-top:3px">${esc(who)} &middot; ${esc(when)}</div></div>
+          <span class="pill pill-warn">${n} out</span></div>
+        <p class="note">${esc(who)} ${reached}${u.packed_at ? " (packed " + esc(u.packed_at) + ")" : ""}. None of these ${n} items are in the numbers yet &mdash; worth asking what happened to them.</p>
+        ${flavours ? `<div class="chips">${flavours}</div>` : ""}
+        ${u.reporter_name && u.reporter_name !== u.seller_name ? `<p class="note" style="font-size:12.5px">Reported from ${esc(u.reporter_name)}'s phone, after it was handed over.</p>` : ""}
+      </div>`;
+    }).join("")}</div>` : ""}
 
     <h2 class="sec">Markets</h2>
     <div class="stack-sm">${cards}</div>
@@ -3911,6 +4258,32 @@ document.addEventListener("click", e => {
     if(!same) S.screen = "today";
     render(); window.scrollTo(0,0); return;
   }
+  if(t.dataset.act==="shelf-resume"){
+    /* Take a day that was packed and never counted up back onto the phone, to
+       count it up. Never over a day already in hand - that would lose today's
+       count. It keeps its own market and date; beginDay() will not restamp it. */
+    if(S.startedAt && !S.sentAt){ toast("Send the day you're on first"); return; }
+    const list = loadShelf();
+    const e = list.find(x => x.id === t.dataset.shelf);
+    if(!e || !e.day) return;
+    const back = Object.assign(JSON.parse(JSON.stringify(BLANK)), e.day);
+    delete back.archiveMe; delete back.parkMe;
+    back.mode = S.mode; back.tab = S.tab; back.me = S.me;
+    back.shelfId = e.id;
+    /* Its sheet goes in under an id of its own, so a refused send can tell this
+       sheet from one the same seller already sent for that market from another
+       phone. Matching on the seller's name alone called that "already in",
+       marked this day sent, and its counts never landed. */
+    back.dayRowId = newId();
+    // Taken up again now, so the next open does not see an abandoned day and
+    // put it straight back.
+    back.startedAt = Date.now();
+    back.screen = "closeout";
+    if(!saveShelf(list.filter(x => x.id !== e.id))) return;
+    S = back; save();
+    MY_MARKET = pickMyMarket(); MY_REC = recommendMarket(MY_MARKET.id);
+    render(); window.scrollTo(0,0); return;
+  }
   if(t.dataset.act==="outbox-retry"){
     toast("Trying\u2026");
     sendOutbox().then(() => { toast(waitingDays().length ? "Still not at the shop yet" : "It's at the shop now"); render(); });
@@ -4147,7 +4520,10 @@ document.addEventListener("change", e => {
   }
 });
 
-ensureSession();
+/* Redraw once the sign-in has been checked. The screen is drawn before the
+   answer comes back, so a sign-in found dead on opening only showed "Your code
+   has stopped working" the next time the app was opened. */
+ensureSession().then(() => { if(AUTH.signinBroken) render(); });
 
 setAsideOldDay();
 render();
@@ -4166,6 +4542,11 @@ function resendIfPending(){
   if(loadFixes().some(f => !f.sentAt)) sendFixes().then(() => render());
   // Earlier days set aside when the next market came round.
   if(waitingDays().length) sendOutbox().then(() => render());
+  // Days packed and never counted up, not yet reported to the shop.
+  pruneShelf();
+  if(loadShelf().some(e => !e.reportedAt)) sendUnfinished().then(() => render());
+  // Second sheets the shop hasn't had yet.
+  if(loadSecondSheets().some(x => !x.sentAt && !x.closed)) sendSecondSheets().then(() => render());
 }
 resendIfPending();
 window.addEventListener("online", resendIfPending);
