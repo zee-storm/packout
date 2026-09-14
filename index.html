@@ -1214,6 +1214,17 @@ let AUTH = (() => {
 function saveAuth(){ try{ localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH)); }catch(e){} }
 
 const STORE_KEY = "packout.v2";
+/* Two copies of the app open on one phone share one saved day - on Android a
+   browser tab and the installed app do, and tapping the link again opens a
+   second tab while the first is still alive. The copy left behind still held
+   the day as it was when it last looked, and the next thing it saved - a tap on
+   "No, had extra" - put that old day back over sixteen counts and the money
+   typed in the other copy. Every save now carries a number that only goes up.
+   A copy that finds a higher number than the one it last saw has fallen behind:
+   it takes the newer day instead of writing its own. See save(). */
+const REV_KEY = "packout.v2.rev";
+let SEEN_REV = 0, QUIET_SAVE = false;
+const storedRev = () => { try{ return Number(localStorage.getItem(REV_KEY)) || 0; }catch(e){ return 0; } };
 // Fixes asked for, kept apart from the day so they outlive it. See sendFixes.
 const FIX_KEY   = "packout.fixes.v1";
 const NOTE_KEY  = "packout.note.v1";
@@ -1262,9 +1273,25 @@ const BLANK = {
   codeTyped:"", codeError:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
+SEEN_REV = storedRev();
 loadNote();
 
+/* This copy has fallen behind another one on the same phone: take its day. */
+function takeOtherCopy(){
+  const fresh = load();
+  S = fresh || Object.assign(JSON.parse(JSON.stringify(BLANK)), { me:S.me, mode:S.mode, tab:S.tab });
+  SEEN_REV = storedRev();
+  MY_MARKET = pickMyMarket(); MY_REC = recommendMarket(MY_MARKET.id);
+  // Drawing the day just taken must not save it straight back and wake the other copy.
+  QUIET_SAVE = true;
+  try{ render(); } finally { QUIET_SAVE = false; }
+}
+
 function save(){
+  if(QUIET_SAVE) return true;
+  // Behind another copy: writing now would put an older day over a newer one.
+  if(storedRev() > SEEN_REV){ setTimeout(takeOtherCopy, 0); return false; }
+  const rev = Math.max(Date.now(), SEEN_REV + 1);
   /* Saving never decides what day this is. It used to stamp the date, the
      market and the start time the first time anything was saved - which is
      the moment the app opens, code screen included. A phone opened on a
@@ -1272,7 +1299,8 @@ function save(){
      stamp into the next market it worked: takings filed under the wrong day
      and the wrong market. The stamp belongs to the moment work begins; see
      beginDay(). */
-  try{ localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
+  const wrote = () => { try{ localStorage.setItem(REV_KEY, String(rev)); }catch(e){} SEEN_REV = rev; };
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(S)); wrote(); return true; }
   catch(e){
     // Almost always the photo pushing past the storage limit.
     // The counts are the paycheck; the photo is not. Drop it and keep the numbers.
@@ -1282,7 +1310,7 @@ function save(){
       S.photo = null;
       (S.expenses||[]).forEach(x=>{ x.photo = null; });
       try{
-        localStorage.setItem(STORE_KEY, JSON.stringify(S));
+        localStorage.setItem(STORE_KEY, JSON.stringify(S)); wrote();
         toast("Photos were too big to keep \u2014 your counts and amounts are saved");
         return true;
       }catch(e2){
@@ -1504,7 +1532,26 @@ function ensureSession(){
   return SESSION_FLIGHT;
 }
 
+/* A second copy of the app on this phone (a browser tab and the installed app
+   share one sign-in on Android) may have renewed first. Renewing hands out a
+   new refresh token and retires the old one, so this copy's would be refused -
+   and that refusal was taken as a dead sign-in and written over the good one,
+   telling a seller whose code still worked to get a new one. The newer sign-in
+   on the phone is taken instead, as long as it is the same person. */
+function newerSigninOnPhone(){
+  try{
+    const s = JSON.parse(localStorage.getItem(AUTH_KEY)) || {};
+    if(s.refresh && s.refresh !== AUTH.refresh && !s.signinBroken
+       && s.person === AUTH.person && s.business === AUTH.business){
+      Object.assign(AUTH, { token:s.token, refresh:s.refresh, expires:s.expires, signinBroken:false });
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+
 async function renewSession(){
+  if(newerSigninOnPhone() && AUTH.token && AUTH.expires && Date.now() < AUTH.expires - 60000) return AUTH.token;
   const enrolled = !!(AUTH.person && AUTH.business);
 
   if(AUTH.refresh){
@@ -1524,6 +1571,8 @@ async function renewSession(){
       saveAuth(); return AUTH.token;
     }
     if(r.status !== 400 && r.status !== 401) return null;   // busy or down: later
+    // Refused - but the other copy may have renewed while this one was asking.
+    if(newerSigninOnPhone()) return AUTH.token;
     // The server answered that this sign-in is gone for good.
     if(enrolled){ AUTH.signinBroken = true; saveAuth(); return null; }
   }
@@ -1940,6 +1989,7 @@ async function sendDay(){
             method:"POST", headers: cloudHeaders({ "Prefer":"resolution=ignore-duplicates,return=minimal" }),
             body: JSON.stringify(rows)
           });
+          if(rc.status === 400){ S.sendError = "countsrefused"; save(); return "refused"; }
           if(!rc.ok) throw new Error("counts " + rc.status);
         }
         S.sentAt = S.sentAt || new Date().toISOString();
@@ -1965,6 +2015,13 @@ async function sendDay(){
          it falls through as a failed send and tries again. */
       S.sendError = "signin"; save(); return "signin";
     }
+    if(res.status === 400){
+      /* Turned away by the database itself - a number it cannot hold. More
+         signal never fixes that, and a nine-digit cash figure sat on "Waiting
+         for signal" for ever. (A column the database doesn't have yet was
+         already dealt with in postDayRow.) */
+      S.sendError = "refused"; save(); return "refused";
+    }
     if(!res.ok) throw new Error("day " + res.status);
     const day = (await res.json())[0];
 
@@ -1973,6 +2030,10 @@ async function sendDay(){
       const r2 = await fetch(CLOUD.url + "/rest/v1/day_counts", {
         method: "POST", headers: cloudHeaders(), body: JSON.stringify(rows)
       });
+      /* The day is in and only its counts were turned away. Its money is locked
+         on the shop's side now, so nothing here may offer to change it - an
+         edit would be dropped while the phone said Sent. */
+      if(r2.status === 400){ S.sendError = "countsrefused"; save(); return "refused"; }
       if(!r2.ok) throw new Error("counts " + r2.status);
     }
     S.sentAt = new Date().toISOString();
@@ -2323,7 +2384,7 @@ async function sendOutboxNow(){
           }
         }
         else if(res.ok) dayId = (await res.json())[0].id;
-        else problem = "failed";
+        else problem = res.status === 400 ? "refused" : "failed";   // turned away, not waiting on signal
 
         if(dayId){
           const rows = (e.counts || []).map(c => Object.assign({}, c, { market_day_id: dayId }));
@@ -2333,7 +2394,7 @@ async function sendOutboxNow(){
               body: JSON.stringify(rows)
             });
             if(rc.ok) ok = true;
-            else problem = rc.status === 403 ? "signin" : "failed";
+            else problem = rc.status === 403 ? "signin" : rc.status === 400 ? "refused" : "failed";
           } else ok = true;
         }
       }
@@ -2372,6 +2433,8 @@ function outboxNotice(){
     const when = e.day ? fmtDate(new Date(e.day + "T12:00:00")) : "An earlier day";
     const why = e.problem === "signin"
       ? "Your code has stopped working on this phone, so it can't be sent. It isn't your signal. It's saved here - get a new code from Nawid."
+      : e.problem === "refused" || e.problem === "countsrefused"
+      ? "The shop's system wouldn't take one of its numbers, so it can't go in as it is. It isn't your signal. It's saved on this phone - tell Nawid."
       : e.problem === "clash"
       ? ((secondSheetWith(e.secondSheetId) || {}).sentAt
           ? "Another day is already logged for that market and date. Nawid can see this sheet next to it."
@@ -2637,6 +2700,7 @@ function readImage(file, maxPx, quality, cb){
     let data = null;
     try{ data = c.toDataURL("image/jpeg", quality); }catch(err){}
     URL.revokeObjectURL(img.src);
+    if(!data) toast("Couldn't read that photo");
     cb(data);
   };
   img.onerror = () => { toast("Couldn't read that photo"); cb(null); };
@@ -2865,6 +2929,12 @@ function scr_loadout(){
   </div>`;
 }
 function foot_loadout(){
+  // A count the database could never hold stops here, next to its box.
+  const big = P_IDS.find(p => (S.opening[p] || 0) > COUNT_MAX);
+  if(big) return `<button class="btn btn-ghost" data-act="jump" data-sel="[data-set='opening'][data-p='${big}']">
+            <span>${esc(prod(big).short)} looks too big &mdash; check it</span>
+          </button>
+          <button class="btn btn-quiet" data-go="today">Back</button>`;
   return `<button class="btn" data-go="market">Cooler is packed</button>
           <button class="btn btn-quiet" data-go="today">Back</button>`;
 }
@@ -3168,8 +3238,48 @@ function scr_closeout(){
       : `<button class="btn btn-quiet" data-act="toggle" data-flag="showDamaged">${dmgTotal ? dmgTotal+" damaged &mdash; edit" : "Anything come back damaged?"}</button>`}
   </div>`;
 }
-function closeoutMissing(){
+/* Numbers that cannot be true, box by box.
+
+   A minus Square figure was accepted, sent, and taken off the day's takings;
+   a minus expense took $40 off a seller's pay. A stuck key's nine-digit cash
+   was turned away by the database, and the phone said "Waiting for signal"
+   for ever. Nothing a seller's phone keyboard can type should get as far as
+   the shop wrong - so each one is named, while the day is still in front of
+   them. The ceilings are far above any real market and far below what the
+   database refuses. */
+const MONEY_MAX = 20000, COUNT_MAX = 5000;
+function numberProblems(){
   const m = [];
+  const money = (label, raw, sel) => {
+    if(raw === "" || raw === null || raw === undefined) return;
+    const v = Number(raw);
+    if(!Number.isFinite(v)) m.push({ label: label + " isn't a number", sel });
+    else if(v < 0) m.push({ label: label + " can't be below $0", sel });
+    else if(v > MONEY_MAX) m.push({ label: label + " looks too big — check it", sel });
+  };
+  money("Cash", S.cashCounted, "#cash");
+  money("Square", S.cardTotal, "#card");
+  (S.otherPays || []).forEach((o, i) =>
+    money(String(o.how || "Other payment").trim().slice(0, 24) || "Other payment", o.amount, `[data-pay='${i}'][data-f='amount']`));
+  (S.expenses || []).forEach((e, i) =>
+    money(String(e.kind || "Expense").trim().slice(0, 24) || "Expense", e.amount, `[data-exp='${i}'][data-f='amount']`));
+  money("Discounts", S.discounts, "#disc");
+  const t = S.travel || {};
+  if(t.mode === "own" && t.gasMode === "flat") money("Gas", t.gasAmount, "#gasamt");
+  if(S.chipsSold !== "" && S.chipsSold !== null && S.chipsSold !== undefined){
+    const c = Number(S.chipsSold);
+    if(!Number.isFinite(c) || c < 0 || !Number.isInteger(c)) m.push({ label:"chips has to be a whole number", sel:"#chips" });
+    else if(c > COUNT_MAX) m.push({ label:"chips looks too big — check it", sel:"#chips" });
+  }
+  WENT_OUT().forEach(p => {
+    if((S.opening[p] || 0) > COUNT_MAX)
+      m.push({ label: prod(p).short + " went out looks too big", sel:"[data-set='closing'][data-p='" + p + "']" });
+  });
+  return m;
+}
+
+function closeoutMissing(){
+  const m = numberProblems();
   /* Wrong before blank. A number that cannot be true needs fixing while the
      cooler is still open and the row is still fresh in their head - being sent
      to the next empty box first is how a typo survives to the end of the day. */
@@ -3316,8 +3426,8 @@ function scr_result(){
 
     <div class="card card-pad stack-sm stripe stripe-${S.sentAt || AUTH.demo ? "good" : "warn"}">
       <div class="spread">
-        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : S.sendError === "signin" ? "Your code has stopped working" : S.sendError === "clash" ? "Could not go in yet" : "Waiting for signal"}</div>
-        ${S.sentAt || AUTH.demo || S.sendError === "signin" ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
+        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : S.sendError === "signin" ? "Your code has stopped working" : S.sendError === "clash" ? "Could not go in yet" : S.sendError === "refused" ? "The shop's system turned it away" : S.sendError === "countsrefused" ? "The counts didn't go in" : "Waiting for signal"}</div>
+        ${S.sentAt || AUTH.demo || S.sendError === "signin" || S.sendError === "refused" || S.sendError === "countsrefused" ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
       </div>
       <p class="note">${AUTH.demo
         ? "This is the look-around version, so nothing left this phone. On a real phone this day would already be with Nawid."
@@ -3327,11 +3437,17 @@ function scr_result(){
         ? "Your day is saved on this phone. The shop has stopped accepting this phone \u2014 it was taken off the shop's list, or its sign-in ran out. It isn't your signal, and waiting won't fix it. Get a new code from Nawid and type it in with the button below; your day goes up by itself, under your name."
         : S.sendError === "clash" && (secondSheetWith(S.secondSheetId) || {}).sentAt
         ? "A different day is already logged for this market on that date, so yours couldn't go in as the day. Nawid can see your sheet next to that one, and will sort out which is right. Nothing you did is wrong, and your counts are safe on this phone."
+        : S.sendError === "countsrefused"
+        ? "Nawid has this day's money, but the shop's system wouldn't take the flavour counts. It isn't your signal, and trying again won't fix it. The counts are saved on this phone \u2014 tell Nawid."
+        : S.sendError === "refused"
+        ? "Your day is saved on this phone, but the shop's system wouldn't take one of its numbers \u2014 most likely a typo. It isn't your signal, and trying again as it is won't fix it. Check the numbers and send it again, or tell Nawid."
         : S.sendError === "clash"
         ? "A different day is already logged for this market on that date, so yours could not go in. Nothing you did is wrong and nothing is lost \u2014 your counts are safe on this phone. Tell Nawid, and tap Try again once he says it is clear."
         : "Saved on your phone. It goes on its own as soon as you have signal, even if you close the app. Nothing is lost."}</p>
       ${S.sendError === "signin" && !S.sentAt && !AUTH.demo
         ? `<button class="btn" data-act="resignin" style="margin-top:4px">Type a new code</button>` : ""}
+      ${S.sendError === "refused" && !S.sentAt && !AUTH.demo
+        ? `<button class="btn" data-go="closeout" style="margin-top:4px">Check the numbers</button>` : ""}
       <div class="chips" style="margin-top:4px">
         ${WENT_OUT().map(pid=>`<span class="chip">${esc(prod(pid).short)} ${soldByCount(pid)} sold \u00B7 ${S.closing[pid]||0} back</span>`).join("")}
       </div>
@@ -4188,6 +4304,15 @@ document.addEventListener("click", e => {
   const adj = t.dataset.adj;
   if(adj){
     const p = t.dataset.p, d = Number(t.dataset.d);
+    /* A thumb brushing "–" on a flavour nobody has counted yet used to answer it
+       as 0 back - everything sold - and the footer moved on to the next flavour.
+       An uncounted flavour stays uncounted until a number is actually put in. */
+    const uncounted = S[adj][p] === undefined || S[adj][p] === null || S[adj][p] === "";
+    if(adj === "closing" && uncounted && d < 0){
+      const box = document.querySelector(`[data-set='closing'][data-p='${p}']`);
+      if(box){ box.classList.remove("flash"); void box.offsetWidth; box.classList.add("flash"); }
+      return;
+    }
     const cur = S[adj][p] ?? (adj==="opening" ? MY_REC.byProduct[p].qty : 0);
     S[adj][p] = Math.max(0, cur + d);
     render(); return;
@@ -4473,6 +4598,9 @@ document.addEventListener("change", e => {
     const f = e.target.files && e.target.files[0];
     if(!f) return;
     readImage(f, 900, 0.7, data => {
+      /* A photo the phone couldn't read used to say "Setup logged" straight over
+         "Couldn't read that photo", and stamp the setup time with no photo. */
+      if(!data) return;
       S.photo = data;
       S.arrivedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
       buzz(30); toast("Setup logged at "+S.arrivedAt); render();
@@ -4486,6 +4614,7 @@ document.addEventListener("change", e => {
     const f = el.files && el.files[0];
     if(!f) return;
     readImage(f, 700, 0.6, data => {
+      if(!data) return;                    // not "Receipt attached" when nothing was
       const row = S.expenses[Number(pf)];
       if(row){ row.photo = data; buzz(20); toast("Receipt attached"); render(); }
     });
@@ -4551,7 +4680,29 @@ function resendIfPending(){
 resendIfPending();
 window.addEventListener("online", resendIfPending);
 // Coming back to the app after it sat in the background counts as opening it.
-document.addEventListener("visibilitychange", () => { if(!document.hidden) resendIfPending(); });
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden) return;
+  if(storedRev() > SEEN_REV) takeOtherCopy();     // another copy moved on while this one slept
+  resendIfPending();
+});
+
+/* Another copy of the app on this phone saved something. Its day is taken the
+   moment it lands, before this copy can be touched; see save(). Its sign-in is
+   taken too - a renewed one in place, and a different person or a signing out
+   by starting this copy over, the way a new sign-in always does. */
+window.addEventListener("storage", e => {
+  if(e.key === REV_KEY){ if(storedRev() > SEEN_REV) takeOtherCopy(); return; }
+  if(e.key !== AUTH_KEY) return;
+  let next = {};
+  try{ next = JSON.parse(e.newValue || "null") || {}; }catch(x){}
+  if(next.person !== AUTH.person || next.business !== AUTH.business || !!next.demo !== !!AUTH.demo){
+    location.reload(); return;
+  }
+  Object.keys(AUTH).forEach(k => { delete AUTH[k]; });
+  Object.assign(AUTH, next);
+  QUIET_SAVE = true;
+  try{ render(); } finally { QUIET_SAVE = false; }
+});
 })();
 </script>
 
