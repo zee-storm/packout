@@ -7,7 +7,7 @@
    Bump CACHE whenever the app file changes, or phones will keep serving the
    old one. */
 
-const CACHE = "packout-7592636e";
+const CACHE = "packout-8a566cfd";
 
 // The typefaces, so the app still looks like itself with no signal. Public
 // files with nobody's data in them - the one kind of outside request worth
@@ -27,8 +27,12 @@ const SHELL = [
 self.addEventListener("install", event => {
   event.waitUntil(
     caches.open(CACHE)
-      // Individually, so one bad URL can't fail the whole install.
-      .then(c => Promise.all(SHELL.map(u => c.add(u).catch(() => null))))
+      /* Individually, so one bad URL can't fail the whole install - and straight
+         from the site, not the phone's own short-term copy. The site lets a phone
+         keep a page for ten minutes, so a phone that had opened the app just
+         before a new version went up stored the OLD page as its offline copy,
+         under the new version's name, and ran it whenever it had no signal. */
+      .then(c => Promise.all(SHELL.map(u => c.add(new Request(u, { cache: "reload" })).catch(() => null))))
       .then(() => self.skipWaiting())
   );
 });
@@ -78,9 +82,21 @@ self.addEventListener("fetch", event => {
 
   // A tap on the home screen icon is a navigation. If the network is gone,
   // it still has to open, so fall back to the cached app.
+  /* Asked fresh each time (a quick "has it changed?" that costs next to nothing
+     when it hasn't), so a new version reaches a phone the first time it opens
+     with signal. The page that opened is kept as the offline copy, so no signal
+     opens the version this phone last ran - never an older one. */
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req).catch(() => caches.match("./index.html").then(r => r || Response.error()))
+      fetch(new Request(req, { cache: "no-cache" }))
+        .then(res => {
+          if (res && res.ok && res.type === "basic") {
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put("./index.html", copy)).catch(() => {});
+          }
+          return res;
+        })
+        .catch(() => caches.match("./index.html").then(r => r || Response.error()))
     );
     return;
   }
