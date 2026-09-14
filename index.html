@@ -1732,7 +1732,14 @@ function dayPayload(){
     fronted: expTotal("own"),
     fronted_items: (S.expenses || []).filter(e => e.source === "own" && Number(e.amount)),
     discounts: Number(S.discounts) || 0,
-    note: S.note || null,
+    /* The note carries two answers that never left the phone before: whether
+       they sold out, and when - asked on every count-up - and a big-order lead,
+       a customer's name and number the seller was told was "saved". The day is
+       wiped when the next one starts, so both were gone by the next market. */
+    note: [String(S.note || "").trim(),
+           S.soldOut ? "Sold out" + (String(S.soldOutAt || "").trim() ? " at " + String(S.soldOutAt).trim() : "") : "",
+           String(S.lead || "").trim() ? "Big order: " + String(S.lead).trim() : ""]
+          .filter(Boolean).join("\n") || null,
     /* How they got there, and what that adds to their pay. Both were on the
        seller's "shop owes you" from the start and never left the phone, so
        Nawid's figure was short by exactly that - Billal $20, Habid $25. */
@@ -3779,7 +3786,7 @@ function owner_market(mid){
           ${d.carGas ? line("Gas for their own car", money2(d.carGas)) : ""}
           ${line("Owed to " + esc(d.name), money2(d.owed))}
           ${Number(r.discounts) ? line("Free ones, deals and trades (their guess)", money2(Number(r.discounts))) : ""}
-          ${r.note ? `<p class="note" style="margin-top:8px">&ldquo;${esc(r.note)}&rdquo;</p>` : ""}
+          ${r.note ? `<p class="note" style="margin-top:8px;white-space:pre-line">&ldquo;${esc(r.note)}&rdquo;</p>` : ""}
         </div>
         ${d.fixList && d.fixList.length ? `<div class="card-pad stack-sm" style="padding-top:0">
           <div class="lbl" style="color:var(--bad)">${d.fixList.length === 1 ? "A fix asked for" : d.fixList.length + " fixes asked for"}</div>
