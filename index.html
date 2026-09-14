@@ -1240,7 +1240,10 @@ const BLANK = {
   submittedAt:null, showFix:false, corrections:[], fixDraft:"", marketOpen:null,
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
-  travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
+  /* Nothing about travel is answered for them. "Company van, no drop-off" used
+     to be pre-selected, so a seller who skipped the card claimed nothing, and
+     one who drove somebody could send it without ever saying so. */
+  travel:{ mode:"", legs:null, passenger:"", marketId:"", gasMode:"", gasAmount:"" },
   packedBy:"you", showPacker:false, me:null, dayOf:null, marketId:null, startedAt:null, sentAt:null, sendError:null,
   submittedBy:null,              // who counted this day - it is sent under their name
   dayOwner:null,                 // whose day this is, from the moment it began
@@ -1302,7 +1305,7 @@ function load(){
     // cleared below and take them with it. Never allowed to cost the day.
     try{ adoptOldFixes(merged); }catch(e){}
     if(!Array.isArray(merged.expenses)) merged.expenses = [];
-    merged.travel = Object.assign({mode:"van",legs:0,passenger:"",marketId:"",gasMode:"claim",gasAmount:""}, merged.travel || {});
+    merged.travel = Object.assign({mode:"",legs:null,passenger:"",marketId:"",gasMode:"",gasAmount:""}, merged.travel || {});
     delete merged.drive;
     if(!SELLER_SCREEN_NAMES.includes(merged.screen)) merged.screen = "today";
 
@@ -1636,8 +1639,50 @@ function dayPayload(){
     fronted: expTotal("own"),
     fronted_items: (S.expenses || []).filter(e => e.source === "own" && Number(e.amount)),
     discounts: Number(S.discounts) || 0,
-    note: S.note || null
+    note: S.note || null,
+    /* How they got there, and what that adds to their pay. Both were on the
+       seller's "shop owes you" from the start and never left the phone, so
+       Nawid's figure was short by exactly that - Billal $20, Habid $25. */
+    travel: travelRecord(),
+    driving_pay: driverPay(),
+    car_gas: carAllowance()
   };
+}
+
+// The travel card as the shop sees it: names, not ids.
+function travelRecord(){
+  const t = S.travel || {};
+  const who = t.passenger ? slr(t.passenger) : null;
+  const to  = t.marketId ? mkt(t.marketId) : null;
+  return {
+    how: t.mode || null,                               // van, own, ride
+    legs: t.mode === "van" ? (Number(t.legs) || 0) : 0, // 1 one way, 2 drop off and pick up
+    passenger: t.mode === "van" && who ? who.name : null,
+    to_market: t.mode === "van" && to ? to.name : null,
+    gas: t.mode === "own" ? (t.gasMode || null) : null  // claim (a receipt) or flat
+  };
+}
+
+/* Sending the sheet itself. The travel columns arrive with db/025; a phone
+   that has the new app before that SQL is run must still get its day in, so
+   if the database says it has no such column, the day goes again without
+   them - exactly as it went before. Used by the day and by the waiting-days
+   queue, which both post sheets. */
+const TRAVEL_FIELDS = ["travel", "driving_pay", "car_gas"];
+async function postDayRow(payload){
+  const post = body => fetch(CLOUD.url + "/rest/v1/market_days", {
+    method: "POST",
+    headers: cloudHeaders({ "Prefer": "return=representation" }),
+    body: JSON.stringify(body)
+  });
+  const res = await post(payload);
+  if(res.status !== 400) return res;
+  const d = await res.clone().json().catch(() => ({}));
+  const missing = d.code === "PGRST204" || TRAVEL_FIELDS.some(k => String(d.message || "").includes(k));
+  if(!missing) return res;
+  const lean = Object.assign({}, payload);
+  TRAVEL_FIELDS.forEach(k => { delete lean[k]; });
+  return post(lean);
 }
 
 function countRows(dayId){
@@ -1723,10 +1768,14 @@ function dayFromCloud(row, m){
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
     overSend: 0, fixes: fixList.length, fixList, row,
-    // Pay, plus whatever they fronted. Fronted money is not sales, so it never
-    // counts towards commission - it is simply owed back.
-    owed: dayPay(row.seller_id, gross, row.market_id).amount + Number(row.fronted || 0),
+    // Pay, plus whatever they fronted, drove or were given for gas. None of
+    // those are sales, so none counts towards commission - they are owed on top.
+    // A day sent before db/025 has no travel columns and adds nothing, as before.
+    owed: dayPay(row.seller_id, gross, row.market_id).amount + Number(row.fronted || 0)
+          + Number(row.driving_pay || 0) + Number(row.car_gas || 0),
     fronted: Number(row.fronted || 0),
+    driving: Number(row.driving_pay || 0),
+    carGas: Number(row.car_gas || 0),
     reported: true
   };
 }
@@ -1789,11 +1838,7 @@ async function sendDay(){
   try{
     await ensureSession();
     if(AUTH.signinBroken){ S.sendError = "signin"; save(); return "signin"; }
-    const res = await fetch(CLOUD.url + "/rest/v1/market_days", {
-      method: "POST",
-      headers: cloudHeaders({ "Prefer": "return=representation" }),
-      body: JSON.stringify(dayPayload())
-    });
+    const res = await postDayRow(dayPayload());
     if(res.status === 409){
       /* One sheet per market per day, refused by the database. That is nearly
          always this phone sending its own day twice - harmless. But it is also
@@ -2033,10 +2078,7 @@ async function sendOutboxNow(){
     try{
       if(AUTH.signinBroken){ problem = "signin"; }
       else {
-        const res = await fetch(CLOUD.url + "/rest/v1/market_days", {
-          method:"POST", headers: cloudHeaders({ "Prefer":"return=representation" }),
-          body: JSON.stringify(e.payload)
-        });
+        const res = await postDayRow(e.payload);
         let dayId = null;
         if(res.status === 401 || res.status === 403) problem = "signin";
         else if(res.status === 409){
@@ -2176,6 +2218,10 @@ function driverPay(){
 function carAllowance(){
   const t = S.travel || {};
   return (t.mode==="own" && t.gasMode==="flat") ? (Number(t.gasAmount)||0) : 0;
+}
+// A set gas amount AND a gas receipt out of their own pocket: the same tank, paid twice.
+function gasTwice(){
+  return carAllowance() > 0 && (S.expenses||[]).some(e => e.kind==="Gas" && e.source==="own" && Number(e.amount));
 }
 const WENT_OUT = () => P_IDS.filter(p => (S.opening[p]||0) > 0);
 function countedAll(){ return WENT_OUT().every(p => S.closing[p] !== undefined && S.closing[p] !== null); }
@@ -2734,25 +2780,26 @@ function scr_closeout(){
         </div>
 
         ${S.travel.mode==="van" ? `
-          <div class="lbl" style="margin-top:10px">Did you drop someone off?</div>
+          <div class="lbl" style="margin-top:10px">Did you drive someone to their market?</div>
           <div class="seg">
             <button data-legs="0" aria-pressed="${S.travel.legs===0}">No</button>
-            <button data-legs="1" aria-pressed="${S.travel.legs===1}">Drop off</button>
-            <button data-legs="2" aria-pressed="${S.travel.legs===2}">Both ways</button>
+            <button data-legs="1" aria-pressed="${S.travel.legs===1}">One way</button>
+            <button data-legs="2" aria-pressed="${S.travel.legs===2}">Drop off &amp; pick up</button>
           </div>
+          <div class="hint">One way means you only dropped them off, or only picked them up.</div>
           ${S.travel.legs>0 ? `
             <div class="field" style="margin-top:8px">
               <label class="lbl" for="pass">Who did you drive?</label>
               <select id="pass" data-set="passenger">
                 <option value="">Pick a person</option>
-                ${SELLERS.map(x=>`<option value="${x.id}" ${S.travel.passenger===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
+                ${SELLERS.filter(x=>x.id!==S.me).map(x=>`<option value="${x.id}" ${S.travel.passenger===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
               </select>
             </div>
             <div class="field">
-              <label class="lbl" for="passm">To which market?</label>
+              <label class="lbl" for="passm">To which market? (if you know)</label>
               <select id="passm" data-set="passengerMarket">
                 <option value="">Pick a market</option>
-                ${MARKETS.map(x=>`<option value="${x.id}" ${S.travel.marketId===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
+                ${MARKETS.filter(x=>x.day===(dayMarket()||MY_MARKET).day).map(x=>`<option value="${x.id}" ${S.travel.marketId===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
               </select>
             </div>
 ` : ""}` : ""}
@@ -2768,8 +2815,12 @@ function scr_closeout(){
                  <label class="lbl" for="gasamt">Agreed amount for gas</label>
                  <input id="gasamt" type="number" inputmode="decimal" placeholder="0" value="${esc(S.travel.gasAmount)}" data-set="gasAmount">
                </div>
-               <div class="hint">Goes straight onto what the shop owes you. Don't also add it under money you spent, or it gets paid twice.</div>`
-            : `<div class="hint">Add what you paid under <b>money you spent</b> above &mdash; mark it <b>my own money</b> and snap the receipt. It comes back to you tonight.</div>`}` : ""}
+               ${gasTwice()
+                 ? `<div class="hint" style="color:var(--bad)"><b>Gas is in twice</b> &mdash; a set amount here and a gas receipt under money you spent. Keep one: take the receipt off, or pick <b>I paid, claiming it</b>.</div>`
+                 : `<div class="hint">Goes straight onto what the shop owes you. Don't also add it under money you spent, or it gets paid twice.</div>`}`
+            : S.travel.gasMode==="claim"
+            ? `<div class="hint">Add what you paid under <b>money you spent</b> above &mdash; mark it <b>my own money</b> and snap the receipt. It comes back to you tonight.</div>`
+            : ""}` : ""}
 
         ${S.travel.mode==="ride" ? `<div class="hint">Nothing to log. Whoever drove you claims the driving pay on their own closeout.</div>` : ""}
       </div>
@@ -2817,6 +2868,20 @@ function closeoutMissing(){
       m.push({ label:"who paid for the "+String(e.kind||"expense").toLowerCase(),
                sel:"[data-expsrc='"+i+"']" });
   });
+  /* Getting there. Asked, not assumed: an unanswered card used to read as
+     "company van, drove nobody", which paid a driver nothing and an own-car
+     seller no gas. Driving pay needs a name, and gas can only be paid once. */
+  const t = S.travel || {};
+  if(!t.mode) m.push({ label:"how you got there", sel:"[data-travel='van']" });
+  if(t.mode==="van" && (t.legs===null || t.legs===undefined))
+    m.push({ label:"did you drive someone", sel:"[data-legs='0']" });
+  if(t.mode==="van" && t.legs>0 && !t.passenger)
+    m.push({ label:"who you drove", sel:"#pass" });
+  if(t.mode==="own" && !t.gasMode)
+    m.push({ label:"how the gas is covered", sel:"[data-gasmode='claim']" });
+  if(t.mode==="own" && t.gasMode==="flat" && !(Number(t.gasAmount) > 0))
+    m.push({ label:"the gas amount", sel:"#gasamt" });
+  if(gasTwice()) m.push({ label:"gas is in twice", sel:"#gasamt" });
   return m;
 }
 function foot_closeout(){
@@ -2843,7 +2908,10 @@ function scr_result(){
   const drivePay = driverPay();
   const inHand = moneyIn();
   const dayTook = inHand + fromTill;             // everything the day sold
-  const pay = dayPay(S.me, dayTook, MY_MARKET.id);
+  // The rate of the market this day was worked at. A day carried into the next
+  // morning used today's market instead: Zack's Alameda Saturday showed
+  // Montclair's 20% and $24.40 less than the shop owed him.
+  const pay = dayPay(S.me, dayTook, (dayMarket() || MY_MARKET).id);
   const commission = pay.amount;
   const carGas = carAllowance();
   const owed = commission + drivePay + fromOwn + carGas;
@@ -2888,7 +2956,7 @@ function scr_result(){
           ? `<div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(pay.rate*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(pay.commission)}</span></div>`
           : `<div class="kv"><span class="kv-k">Your day rate</span><span class="kv-v">${money2(pay.base)}</span></div>
              <div class="kv"><span class="kv-k" style="color:var(--muted)">${Math.round(pay.rate*100)}% would have been ${money2(pay.commission)}</span><span class="kv-v" style="color:var(--muted)">&mdash;</span></div>`}
-        ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?" both ways":" one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
+        ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?", drop off &amp; pick up":", one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
         ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
         ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
         <div class="kv kv-total"><span class="kv-k">Total</span><span class="kv-v">${money2(owed)}</span></div>
@@ -3016,7 +3084,7 @@ function liveDay(plan){
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: fixesForDay().length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
-             owed: closed ? (dayPay(S.me, moneyIn()+expTotal("till"), MY_MARKET.id).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
+             owed: closed ? (dayPay(S.me, moneyIn()+expTotal("till"), (dayMarket() || MY_MARKET).id).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
 
@@ -3130,6 +3198,10 @@ function owner_market(mid){
           ${Number(r.spent_from_till) ? line("Spent out of the till", money2(Number(r.spent_from_till))) : ""}
           ${line("Chips sold", Number(r.chips_sold)||0)}
           ${Number(r.fronted) ? line("Paid out of their own pocket", money2(Number(r.fronted))) : ""}
+          ${d.driving ? line("Driving" + (r.travel && r.travel.passenger ? " &mdash; " + esc(r.travel.passenger) : "")
+                              + (r.travel && Number(r.travel.legs) === 2 ? ", drop off &amp; pick up" : ", one way"), money2(d.driving)) : ""}
+          ${d.carGas ? line("Gas for their own car", money2(d.carGas)) : ""}
+          ${line("Owed to " + esc(d.name), money2(d.owed))}
           ${Number(r.discounts) ? line("Free ones, deals and trades (their guess)", money2(Number(r.discounts))) : ""}
           ${r.note ? `<p class="note" style="margin-top:8px">&ldquo;${esc(r.note)}&rdquo;</p>` : ""}
         </div>
@@ -3237,8 +3309,10 @@ function owner_today(){
   const fees      = TODAY_PLAN.reduce((a,p)=>a+feeOf(mkt(p.marketId)),0);
   const feesAreGuessed = TODAY_PLAN.every(p => !feeKnown(mkt(p.marketId)));
   const nClosed   = closedOnes.length, nAll = TODAY_PLAN.length;
-  const dayDriverPay = VAN_RUNS.length * DRIVER_LEG_PAY * 2;   // one drop-off run, both ways
-  const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0) + dayDriverPay;
+  /* Driving is what sellers actually sent. It used to be $20 for every van
+     pairing anywhere in the week's rota - $40 on a Monday with no vans. */
+  const dayDriverPay = closedOnes.reduce((a,d)=>a+(d.driving||0),0);
+  const owedCrew  = closedOnes.reduce((a,d)=>a+(d.owed||0),0);
 
   return `<div class="pad stack">
     <div>
@@ -3886,8 +3960,10 @@ document.addEventListener("click", e => {
   const tm = t.dataset.travel;
   if(tm){
     S.travel = Object.assign({}, S.travel, { mode:tm });
-    if(tm!=="van"){ S.travel.legs=0; S.travel.passenger=""; S.travel.marketId=""; }
-    if(tm!=="own"){ S.travel.gasAmount=""; }
+    // Changing how you got there clears the other way's answers, so a van
+    // drop-off left behind can never be paid on an own-car day.
+    if(tm!=="van"){ S.travel.legs=null; S.travel.passenger=""; S.travel.marketId=""; }
+    if(tm!=="own"){ S.travel.gasMode=""; S.travel.gasAmount=""; }
     render(); return;
   }
   const gm = t.dataset.gasmode;
