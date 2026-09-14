@@ -750,13 +750,13 @@ const COMMISSION = 0.20;
    shop-wide number would quietly pay several people the wrong amount. */
 /* Nawid said "most is like 160". Both sellers asked directly said 150. Going
    with the people who receive it - but this default is still a guess, and the
-   aim is that nobody relies on it: Zack is 220 at one market and 120 at
-   another, so any single number is wrong for somebody. */
+   aim is that nobody relies on it: one seller is paid differently at each
+   of their two markets, so any single number is wrong for somebody. */
 const BASE_PAY_DEFAULT = 150;
 
-/* A person carries their usual deal, and a market can override it. Zack is the
-   case that proves it is needed: $220 or 22% at Alameda on Saturday, $120 or
-   20% at Montclair on Sunday. Same man, same week. One figure against his name
+/* A person carries their usual deal, and a market can override it. One seller
+   is the case that proves it is needed: a different day rate and commission on
+   Saturday than on Sunday. Same person, same week. One figure against their name
    would be wrong on at least one of those days. */
 function rateFor(sid, mid){
   const s = slr(sid);
@@ -825,73 +825,61 @@ const SHOP = {
   feeLow: 45, feeHigh: 95
 };
 
-const SELLERS = [
-  { id:"ali", name:"Ali" },
-  { id:"almas", name:"Almas" },
-  { id:"amin", name:"Amin" },
-  { id:"bahir", name:"Bahir", basePay:150 },
-  { id:"billal", name:"Billal" },
-  { id:"brook", name:"Brook" },
-  { id:"daud", name:"Daud" },
-  { id:"emilio", name:"Emilio" },
-  { id:"habid", name:"Habid" },
-  { id:"joey", name:"Joey" },
-  { id:"musawir", name:"Musawir" },
-  { id:"muzamil", name:"Muzamil" },
-  { id:"nawid", name:"Nawid" },
-  { id:"suliman", name:"Suliman", basePay:150 },
-  { id:"young", name:"Young" },
-  { id:"zack", name:"Zack" }
-];
+/* Who works here, and on what pay, is not written in this page any more: anyone
+   with the link can read a page, and it carried every seller's name, the rota
+   and some pay rates. A signed-in phone gets them from the shop's database (an
+   owner's phone: everyone; a seller's phone: only themselves). Filled in by
+   applyCatalogue() below, before anything is drawn. */
+const SELLERS = [];
 
 const MARKETS = [
-  { id:"fairfield-mon", name:"Fairfield", day:"Mon", crew:["emilio"], vehicle:null },
-  { id:"modesto-mon", name:"Modesto", day:"Mon", crew:["muzamil"], vehicle:null },
+  { id:"fairfield-mon", name:"Fairfield", day:"Mon", crew:[], vehicle:null },
+  { id:"modesto-mon", name:"Modesto", day:"Mon", crew:[], vehicle:null },
   { id:"berkeley-mon", name:"Berkeley", day:"Mon", crew:[], vehicle:null },
-  { id:"oakland-mon", name:"Oakland", day:"Mon", crew:["billal"], vehicle:null },
+  { id:"oakland-mon", name:"Oakland", day:"Mon", crew:[], vehicle:null },
   { id:"martinezkaiser-mon", name:"Martinez Kaiser", day:"Mon", crew:[], vehicle:null },
   { id:"concord-tue", name:"Concord", day:"Tue", crew:[], vehicle:null },
-  { id:"berkeley-tue", name:"Berkeley", day:"Tue", crew:["billal"], vehicle:null },
+  { id:"berkeley-tue", name:"Berkeley", day:"Tue", crew:[], vehicle:null },
   { id:"sanleandro-tue", name:"San Leandro", day:"Tue", crew:[], vehicle:null },
   { id:"martinez-tue", name:"Martinez", day:"Tue", crew:[], vehicle:null },
-  { id:"walnutcreekkaiser-wed", name:"Walnut Creek Kaiser", day:"Wed", crew:["habid"], vehicle:null },
+  { id:"walnutcreekkaiser-wed", name:"Walnut Creek Kaiser", day:"Wed", crew:[], vehicle:null },
   { id:"paloalto-wed", name:"Palo Alto", day:"Wed", crew:[], vehicle:null },
   { id:"santarosa-wed", name:"Santa Rosa", day:"Wed", crew:[], vehicle:null },
-  { id:"sanleandro-wed", name:"San Leandro", day:"Wed", crew:["bahir"], vehicle:null,
+  { id:"sanleandro-wed", name:"San Leandro", day:"Wed", crew:[], vehicle:null,
     evening:true, hours:"3:00 - 7:00", setupBefore:1.5 },
   { id:"sanrafael-thu", name:"San Rafael", day:"Thu", crew:[], vehicle:null },
   { id:"richmondkaiser-thu", name:"Richmond Kaiser", day:"Thu", crew:[], vehicle:null },
   { id:"losaltos-thu", name:"Los Altos", day:"Thu", crew:[], vehicle:null },
   { id:"berkeley-thu", name:"Berkeley", day:"Thu", crew:[], vehicle:null },
-  { id:"vallejokaiser-fri", name:"Vallejo Kaiser", day:"Fri", crew:["muzamil"], vehicle:null },
-  { id:"oaklandkaiser-fri", name:"Oakland Kaiser", day:"Fri", crew:["joey"], vehicle:null },
+  { id:"vallejokaiser-fri", name:"Vallejo Kaiser", day:"Fri", crew:[], vehicle:null },
+  { id:"oaklandkaiser-fri", name:"Oakland Kaiser", day:"Fri", crew:[], vehicle:null },
   { id:"martinezkaiser-fri", name:"Martinez Kaiser", day:"Fri", crew:[], vehicle:null },
-  { id:"rossmoor-fri", name:"Rossmoor", day:"Fri", crew:["bahir"], vehicle:null },
-  { id:"natomas-sat", name:"Natomas", day:"Sat", crew:["bahir"], vehicle:"Grey minivan" },
-  { id:"orinda-sat", name:"Orinda", day:"Sat", crew:["ali"], vehicle:null },
-  { id:"pleasanthill-sat", name:"Pleasant Hill", day:"Sat", crew:["suliman"], vehicle:null },
-  { id:"sunnyvale-sat", name:"Sunnyvale", day:"Sat", crew:["muzamil"], vehicle:null },
-  { id:"diablo-sat", name:"Diablo", day:"Sat", crew:["billal"], vehicle:null },
-  { id:"oakland-sat", name:"Oakland", day:"Sat", crew:["almas","musawir"], vehicle:null },
-  { id:"pinole-sat", name:"Pinole", day:"Sat", crew:["muzamil","young"], vehicle:null },
-  { id:"brentwood-sat", name:"Brentwood", day:"Sat", crew:["daud"], vehicle:null },
+  { id:"rossmoor-fri", name:"Rossmoor", day:"Fri", crew:[], vehicle:null },
+  { id:"natomas-sat", name:"Natomas", day:"Sat", crew:[], vehicle:"Grey minivan" },
+  { id:"orinda-sat", name:"Orinda", day:"Sat", crew:[], vehicle:null },
+  { id:"pleasanthill-sat", name:"Pleasant Hill", day:"Sat", crew:[], vehicle:null },
+  { id:"sunnyvale-sat", name:"Sunnyvale", day:"Sat", crew:[], vehicle:null },
+  { id:"diablo-sat", name:"Diablo", day:"Sat", crew:[], vehicle:null },
+  { id:"oakland-sat", name:"Oakland", day:"Sat", crew:[], vehicle:null },
+  { id:"pinole-sat", name:"Pinole", day:"Sat", crew:[], vehicle:null },
+  { id:"brentwood-sat", name:"Brentwood", day:"Sat", crew:[], vehicle:null },
   { id:"northbeach-sat", name:"North Beach", day:"Sat", crew:[], vehicle:null },
-  { id:"alameda-sat", name:"Alameda", day:"Sat", crew:["zack"], vehicle:null, payBy:{ zack:{ basePay:220, rate:0.22 } } },
-  { id:"hayward-sat", name:"Hayward", day:"Sat", crew:["emilio"], vehicle:null },
-  { id:"mountainview-sun", name:"Mountain View", day:"Sun", crew:["nawid"], vehicle:"Own car" },
-  { id:"livermore-sun", name:"Livermore", day:"Sun", crew:["muzamil"], vehicle:"Own car" },
-  { id:"temescal-sun", name:"Temescal", day:"Sun", crew:["billal"], vehicle:"Own car" },
-  { id:"montclair-sun", name:"Montclair", day:"Sun", crew:["young","muzamil","zack"], vehicle:null, payBy:{ zack:{ basePay:120, rate:0.20 } } },
-  { id:"stonestown-sun", name:"Stonestown", day:"Sun", crew:["bahir"], vehicle:"Gold van" },
-  { id:"fortmason-sun", name:"Fort Mason", day:"Sun", crew:["joey"], vehicle:null },
-  { id:"divisadero-sun", name:"Divisadero", day:"Sun", crew:["amin"], vehicle:"Cargo van" },
-  { id:"martinez-sun", name:"Martinez", day:"Sun", crew:["brook"], vehicle:"Own car" },
-  { id:"kensington-sun", name:"Kensington", day:"Sun", crew:["almas"], vehicle:"White minivan" },
-  { id:"sanrafael-sun", name:"San Rafael", day:"Sun", crew:["musawir"], vehicle:"White minivan" },
-  { id:"moraga-sun", name:"Moraga", day:"Sun", crew:["daud"], vehicle:"Gold van" },
-  { id:"antioch-sun", name:"Antioch", day:"Sun", crew:["ali"], vehicle:"Acura" },
-  { id:"walnutcreek-sun", name:"Walnut Creek", day:"Sun", crew:["suliman"], vehicle:null },
-  { id:"westoakland-sun", name:"West Oakland", day:"Sun", crew:["emilio"], vehicle:"Own car" }
+  { id:"alameda-sat", name:"Alameda", day:"Sat", crew:[], vehicle:null },
+  { id:"hayward-sat", name:"Hayward", day:"Sat", crew:[], vehicle:null },
+  { id:"mountainview-sun", name:"Mountain View", day:"Sun", crew:[], vehicle:"Own car" },
+  { id:"livermore-sun", name:"Livermore", day:"Sun", crew:[], vehicle:"Own car" },
+  { id:"temescal-sun", name:"Temescal", day:"Sun", crew:[], vehicle:"Own car" },
+  { id:"montclair-sun", name:"Montclair", day:"Sun", crew:[], vehicle:null },
+  { id:"stonestown-sun", name:"Stonestown", day:"Sun", crew:[], vehicle:"Gold van" },
+  { id:"fortmason-sun", name:"Fort Mason", day:"Sun", crew:[], vehicle:null },
+  { id:"divisadero-sun", name:"Divisadero", day:"Sun", crew:[], vehicle:"Cargo van" },
+  { id:"martinez-sun", name:"Martinez", day:"Sun", crew:[], vehicle:"Own car" },
+  { id:"kensington-sun", name:"Kensington", day:"Sun", crew:[], vehicle:"White minivan" },
+  { id:"sanrafael-sun", name:"San Rafael", day:"Sun", crew:[], vehicle:"White minivan" },
+  { id:"moraga-sun", name:"Moraga", day:"Sun", crew:[], vehicle:"Gold van" },
+  { id:"antioch-sun", name:"Antioch", day:"Sun", crew:[], vehicle:"Acura" },
+  { id:"walnutcreek-sun", name:"Walnut Creek", day:"Sun", crew:[], vehicle:null },
+  { id:"westoakland-sun", name:"West Oakland", day:"Sun", crew:[], vehicle:"Own car" }
 ];
 const DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const DAY_FULL = { Sun:"Sunday", Mon:"Monday", Tue:"Tuesday", Wed:"Wednesday",
@@ -903,6 +891,113 @@ const feeOf    = m => m.fee != null ? m.fee : Math.round((SHOP.feeLow + SHOP.fee
 
 const mkt = id => MARKETS.find(m=>m.id===id);
 const slr = id => SELLERS.find(s=>s.id===id);
+
+/* ---- Who works where, and on what pay ----
+
+   "Just having a look" uses made-up people on a made-up rota, so the look-around
+   shows how the app works without showing who works for the shop. A phone
+   signed in to a business uses what the database gave it, saved on the phone so
+   it still opens with no signal at a market. A phone signed in but not yet
+   given anything - the moment after typing a code - shows only its own person
+   until the database answers (see refreshCatalogue). */
+const CATALOGUE_KEY = "packout.catalogue.v1";
+const DEMO_PEOPLE = [
+  { id:"ari", name:"Ari" },
+  { id:"bea", name:"Bea" },
+  { id:"cal", name:"Cal" },
+  { id:"dani", name:"Dani" },
+  { id:"eli", name:"Eli" },
+  { id:"fern", name:"Fern" },
+  { id:"gabe", name:"Gabe" },
+  { id:"hana", name:"Hana" },
+  { id:"ivo", name:"Ivo" },
+  { id:"jo", name:"Jo" },
+  { id:"kai", name:"Kai" },
+  { id:"lena", name:"Lena" },
+  { id:"milo", name:"Milo" },
+  { id:"nia", name:"Nia" },
+  { id:"omar", name:"Omar" },
+  { id:"pia", name:"Pia" }
+];
+const DEMO_CREW = [
+  { market:"fairfield-mon", person:"hana" },
+  { market:"modesto-mon", person:"lena" },
+  { market:"oakland-mon", person:"eli" },
+  { market:"berkeley-tue", person:"eli" },
+  { market:"walnutcreekkaiser-wed", person:"ivo" },
+  { market:"sanleandro-wed", person:"dani" },
+  { market:"vallejokaiser-fri", person:"lena" },
+  { market:"oaklandkaiser-fri", person:"jo" },
+  { market:"rossmoor-fri", person:"dani" },
+  { market:"natomas-sat", person:"dani" },
+  { market:"orinda-sat", person:"ari" },
+  { market:"pleasanthill-sat", person:"nia" },
+  { market:"sunnyvale-sat", person:"lena" },
+  { market:"diablo-sat", person:"eli" },
+  { market:"oakland-sat", person:"bea" },
+  { market:"oakland-sat", person:"kai" },
+  { market:"pinole-sat", person:"lena" },
+  { market:"pinole-sat", person:"omar" },
+  { market:"brentwood-sat", person:"gabe" },
+  { market:"alameda-sat", person:"pia", basePay:220, rate:0.22 },
+  { market:"hayward-sat", person:"hana" },
+  { market:"mountainview-sun", person:"milo" },
+  { market:"livermore-sun", person:"lena" },
+  { market:"temescal-sun", person:"eli" },
+  { market:"montclair-sun", person:"omar" },
+  { market:"montclair-sun", person:"lena" },
+  { market:"montclair-sun", person:"pia", basePay:120, rate:0.2 },
+  { market:"stonestown-sun", person:"dani" },
+  { market:"fortmason-sun", person:"jo" },
+  { market:"divisadero-sun", person:"cal" },
+  { market:"martinez-sun", person:"fern" },
+  { market:"kensington-sun", person:"bea" },
+  { market:"sanrafael-sun", person:"kai" },
+  { market:"moraga-sun", person:"gabe" },
+  { market:"antioch-sun", person:"ari" },
+  { market:"walnutcreek-sun", person:"nia" },
+  { market:"westoakland-sun", person:"hana" }
+];
+function applyCatalogue(cat){
+  SELLERS.length = 0;
+  (cat.people || []).forEach(x => {
+    const p = { id: x.id, name: x.name };
+    if(x.basePay != null) p.basePay = Number(x.basePay);
+    if(x.rate != null) p.rate = Number(x.rate);
+    SELLERS.push(p);
+  });
+  MARKETS.forEach(m => { m.crew = []; delete m.payBy; });
+  (cat.crew || []).forEach(c => {
+    const m = mkt(c.market);
+    if(!m) return;
+    if(!m.crew.includes(c.person)) m.crew.push(c.person);
+    if(c.basePay != null || c.rate != null){
+      m.payBy = m.payBy || {};
+      m.payBy[c.person] = { basePay: c.basePay == null ? null : Number(c.basePay), rate: c.rate == null ? null : Number(c.rate) };
+    }
+  });
+}
+const CATALOGUE = (() => {
+  let a = {};
+  try{ a = JSON.parse(localStorage.getItem("packout.auth.v1")) || {}; }catch(e){}
+  if(a.business && !a.demo){
+    try{
+      const c = JSON.parse(localStorage.getItem(CATALOGUE_KEY));
+      if(c && c.business === a.business && c.person === (a.person || null)
+         && Array.isArray(c.people) && Array.isArray(c.crew)) return Object.assign({}, c, { source: "saved" });
+    }catch(e){}
+    return { source: "missing", business: a.business, crew: [],
+             people: a.person ? [{ id: a.person, name: a.name || a.person }] : [] };
+  }
+  return { source: "demo", people: DEMO_PEOPLE, crew: DEMO_CREW };
+})();
+/* The sample history below - which also sets how much of each flavour to send
+   to every market - is always drawn on the made-up roster. It used to be drawn
+   on whoever the phone held, and a seller's phone now holds only its own person,
+   so its "Take 143" disagreed with Nawid's Send list saying 145 for the same
+   market: the one number both sides count the cooler against. The phone's own
+   people and rota are put in after it (see the end of the history). */
+applyCatalogue({ people: DEMO_PEOPLE, crew: DEMO_CREW });
 
 /* Placeholder traits behind the sample history below. How well somebody sells,
    how big a market is, how much walks out free - none of that exists until
@@ -1022,7 +1117,7 @@ function startOverIfNewDay(){
      market; never pull it out from under someone typing. A counted day waiting for
      signal isn't being typed into: starting over moves it to the queue. */
   if(S.startedAt && !S.sentAt && !S.submittedAt && !onlyLooked(S)) return false;
-  /* Just counted and sent, still reading Day's done - Bahir sent his first real
+  /* Just counted and sent, still reading Day's done - the first real day ever
      day at 2:53am. Starting over then took the screen away within a minute of
      tapping Send, which looks like the day being lost. By morning it goes. */
   if(S.screen === "result" && S.endedAt && Date.now() - S.endedAt < 3 * 3600 * 1000) return false;
@@ -1120,6 +1215,29 @@ for(let w=8; w>=1; w--){
     });
   });
 }
+
+/* Now the phone's own people and rota. The made-up roster has the same shape and
+   order as the real one, so on a phone that holds the whole list - an owner's -
+   each stand-in in the sample history is shown as the person in the same place,
+   with the same made-up traits; anyone past the end of it gets average ones. A
+   seller's phone shows no sample history, and its own person gets average ones. */
+(() => {
+  if(CATALOGUE.source === "demo") return;          // already on the made-up roster, traits and all
+  const roster = SELLERS.map(x => Object.assign({}, x));
+  applyCatalogue(CATALOGUE);
+  const toPhone = {};
+  if(SELLERS.length > 1){
+    roster.forEach((d, i) => {
+      const p = SELLERS[i];
+      if(!p) return;
+      toPhone[d.id] = p.id;
+      Object.assign(p, { base: d.base, urban: d.urban, giveRate: d.giveRate });
+    });
+    HISTORY.forEach(h => { if(toPhone[h.sellerId]) h.sellerId = toPhone[h.sellerId]; });
+    ROTA.forEach(week => Object.keys(week).forEach(k => { if(toPhone[week[k]]) week[k] = toPhone[week[k]]; }));
+  }
+  SELLERS.forEach(p => { if(p.base == null){ p.base = 1; p.urban = 0; p.giveRate = 0.07; } });
+})();
 
 /* =========================================================
    Today
@@ -1376,7 +1494,7 @@ function load(){
     /* When to throw a saved day away and start clean.
 
        NOT at midnight. San Leandro runs to 7pm, they drive back, and they
-       count at the shop - Bahir's first real day was sent in at 2:53am. The
+       count at the shop - the first real day was sent in at 2:53am. The
        old rule was "different calendar date, start fresh", which wiped an
        entire market's counts the moment the clock rolled over, mid-count,
        with no warning and nothing to get back.
@@ -1695,6 +1813,58 @@ function codeCandidates(typed){
   return out.slice(0, 4);
 }
 
+/* The people and rota this phone may see, from the database. Row rules answer
+   an empty list rather than an error when a phone can't see something, so an
+   answer that doesn't even include this phone's own person is treated as no
+   answer at all - never as "nobody works anywhere". */
+async function fetchCatalogue(){
+  if(AUTH.demo || !AUTH.business) return null;
+  await ensureSession();
+  const q = "?business_id=eq." + encodeURIComponent(AUTH.business);
+  /* The first person on a shared stall is the one who normally works it
+     (db/032 keeps that as sort). Before db/032 there is no sort to order by;
+     the list still loads, just alphabetically. */
+  const crewUrl = order => CLOUD.url + "/rest/v1/market_crew" + q + "&select=market_id,person_id,base_pay,commission&order=" + order;
+  let [pr, cr] = await Promise.all([
+    fetch(CLOUD.url + "/rest/v1/people" + q + "&select=person_id,name,base_pay,commission,active&order=person_id", { headers: cloudHeaders() }),
+    fetch(crewUrl("market_id,sort,person_id"), { headers: cloudHeaders() })
+  ]);
+  if(cr.status === 400) cr = await fetch(crewUrl("market_id,person_id"), { headers: cloudHeaders() });
+  if(!pr.ok || !cr.ok) return null;
+  const num = v => v == null ? null : Number(v);
+  const people = (await pr.json()).filter(x => x.active !== false)
+    .map(x => ({ id: x.person_id, name: x.name, basePay: num(x.base_pay), rate: num(x.commission) }));
+  const crew = (await cr.json())
+    .map(x => ({ market: x.market_id, person: x.person_id, basePay: num(x.base_pay), rate: num(x.commission) }));
+  if(AUTH.person && !people.some(x => x.id === AUTH.person)) return null;
+  return { business: AUTH.business, person: AUTH.person || null, people, crew };
+}
+/* Fetch, and save it if it changed. A phone that had nothing saved starts over
+   straight away to use it; one that had a list waits for a moment when nothing
+   is being worked, so a changed rota never moves a day out from under anyone -
+   a day already begun keeps the market it was stamped with regardless. */
+async function refreshCatalogue(){
+  let cat = null;
+  try{ cat = await fetchCatalogue(); }catch(e){}
+  if(!cat) return false;
+  const was = (() => { try{ return JSON.parse(localStorage.getItem(CATALOGUE_KEY)); }catch(e){ return null; } })();
+  const same = was && JSON.stringify([was.business, was.person, was.people, was.crew]) === JSON.stringify([cat.business, cat.person, cat.people, cat.crew]);
+  if(!same){
+    try{ localStorage.setItem(CATALOGUE_KEY, JSON.stringify(cat)); }catch(e){ return false; }
+    const nothingInHand = !S.startedAt || onlyLooked(S);
+    if(CATALOGUE.source === "missing" || (nothingInHand && S.screen === "today")) location.reload();
+  }
+  return true;
+}
+function catalogueNotice(){
+  if(CATALOGUE.source !== "missing" || AUTH.demo || !AUTH.person) return "";
+  return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">Your markets haven't loaded yet</div>
+      <p class="note">PackOut needs signal once to get your markets and pay from the shop. It isn't that you have nothing on - move somewhere with signal and it loads by itself.</p>
+      <button class="btn btn-quiet btn-sm" data-act="catalogue-retry">Try again</button>
+    </div>`;
+}
+
 // Turning a code into a person. The database checks it; the app only asks.
 async function redeemCode(code){
   const tok = await ensureSession();
@@ -1710,7 +1880,7 @@ async function redeemCode(code){
       /* The database says "that code is not valid" and stops there. True, and
          useless to somebody standing at a market: it could be mistyped, used
          already, run out, or never made in the first place - which is what
-         happened to Suliman. All four have the same next step, so say it. */
+         happened to one seller. All four have the same next step, so say it. */
       const raw = (d && d.message) || "";
       return { ok:false, invalid: /not valid/i.test(raw), msg: /not valid/i.test(raw)
         ? "That code isn't working. It may have been used already, or run out. Ask Nawid to send you a new one."
@@ -1777,7 +1947,7 @@ function dayPayload(){
           .filter(Boolean).join("\n") || null,
     /* How they got there, and what that adds to their pay. Both were on the
        seller's "shop owes you" from the start and never left the phone, so
-       Nawid's figure was short by exactly that - Billal $20, Habid $25. */
+       Nawid's figure was short by exactly that - $20 for one seller, $25 for another. */
     travel: travelRecord(),
     driving_pay: driverPay(),
     car_gas: carAllowance()
@@ -1792,7 +1962,7 @@ function travelRecord(){
   return {
     how: t.mode || null,                               // van, own, ride
     legs: t.mode === "van" ? (Number(t.legs) || 0) : 0, // 1 one way, 2 drop off and pick up
-    passenger: t.mode === "van" && who ? who.name : null,
+    passenger: t.mode === "van" ? (who ? who.name : (String(t.passenger || "").trim() || null)) : null,
     to_market: t.mode === "van" && to ? to.name : null,
     gas: t.mode === "own" ? (t.gasMode || null) : null  // claim (a receipt) or flat
   };
@@ -1881,7 +2051,7 @@ async function loadRealDays(){
    only, on today's market cards - so a fix asked for the morning after an
    evening market, or a sheet refused when it finally found signal the next day,
    reached the database and no screen at all, while the seller's phone said Nawid
-   had it. Young's three refused Montclair sheets were visible for an hour. Now
+   had it. Three refused sheets from one Sunday were visible for an hour. Now
    the last two weeks are listed on Today, the same window as days never counted
    up. They can't be marked done - a fix is never changed - so they drop off
    when they're two weeks old. */
@@ -1998,7 +2168,7 @@ function dayFromCloud(row, m){
   /* What the seller brought in - cash, card and other payments - the same
      figure as "Brought in" on their own phone. Nawid's card and "Money in" used
      to show the tamale money only, chips taken off and till spending put back,
-     under a label that said cash + card: Ali's Orinda card read $1,246 right
+     under a label that said cash + card: one market's card read $1,246 right
      above Cash $410 and Square $860, and every Saturday looked short of the bag
      by the chip sales. Tamale money is still what money per pack is worked on.
      Money spent out of the till isn't in it on either side: the seller's card
@@ -2057,7 +2227,7 @@ async function dayAlreadyThere(){
 
 /* A day this phone believes it sent, that is not actually there.
 
-   It happened on Bahir's first Friday: a test day was already occupying the
+   It happened on the first real Friday: a test day was already occupying the
    slot, the send was refused, and the app called it sent anyway. The counts
    sat on his phone and nobody knew. Checking costs one request and only ever
    un-sends a day when the server answers plainly that it does not have it. */
@@ -2381,7 +2551,10 @@ function shelveDay(day){
   // A day taken back up and left again keeps its id, so the shop hears once.
   const id = copy.shelfId || newId();
   const list = loadShelf().filter(e => e.id !== id);
-  list.push({ id, business: AUTH.business || null, owner: copy.dayOwner || copy.me || null,
+  const ownerId = copy.dayOwner || copy.me || null;
+  list.push({ id, business: AUTH.business || null, owner: ownerId,
+              // The name now, while this phone still holds it: after a hand-over it won't.
+              ownerName: ((ownerId && slr(ownerId)) || {}).name || null,
               setAsideAt: new Date().toISOString(), day: copy, reportedAt: null, problem: null });
   // Only ever trim days the shop already knows about. It used to keep the last
   // five, whatever they were.
@@ -2409,10 +2582,12 @@ async function sendUnfinishedNow(){
   if(AUTH.signinBroken) return;
   for(const e of due){
     const d = e.day, m = mkt(d.marketId);
-    const owner = e.owner || d.dayOwner || d.me || null, who = owner ? slr(owner) : null;
+    const owner = e.owner || d.dayOwner || d.me || null;
+    const who = (owner && slr(owner)) || (e.ownerName ? { name: e.ownerName } : null);
     const out = {}; let items = 0;
     Object.keys(d.opening || {}).forEach(p => { const k = Number(d.opening[p]) || 0; if(k > 0){ out[p] = k; items += k; } });
-    const packer = (!d.packedBy || d.packedBy === "you") ? (who ? who.name : null) : ((slr(d.packedBy) || {}).name || null);
+    const packer = (!d.packedBy || d.packedBy === "you") ? (who ? who.name : null)
+                 : ((slr(d.packedBy) || {}).name || String(d.packedBy).trim() || null);
     let problem = null, ok = false;
     try{
       const res = await fetch(CLOUD.url + "/rest/v1/unfinished_days", {
@@ -2717,7 +2892,16 @@ function expTotal(source){
 function packedByName(){
   if(!S.packedBy || S.packedBy==="you") return "You";
   const x = slr(S.packedBy);
-  return x ? x.name : "You";
+  return x ? x.name : String(S.packedBy).trim() || "You";   // a name typed in
+}
+/* The other people this phone may name. A seller's phone holds only its own
+   person, so on it "who packed" and "who you drove" are typed in. */
+const othersOnPhone = () => SELLERS.filter(x => x.id !== S.me);
+function passengerName(){
+  const p = (S.travel || {}).passenger;
+  if(!p) return "";
+  const x = slr(p);
+  return x ? x.name : String(p).trim();
 }
 function packedBySomeoneElse(){ return !!S.packedBy && S.packedBy!=="you"; }
 /* Dropping another seller off and collecting them is paid, and it still is
@@ -2907,6 +3091,12 @@ function scr_whoami(){
 function scr_dayoff(){
   const next = MARKETS.filter(m => m.crew.includes(S.me))
     .map(m => DAY_FULL[m.day] + " at " + m.name);
+  // Not "nothing on today" when the phone simply hasn't been told its markets yet.
+  if(CATALOGUE.source === "missing") return `<div class="pad stack">
+    ${catalogueNotice()}${unfinishedNotice()}
+    ${signinNotice()}${outboxNotice()}
+    <button class="btn btn-quiet" data-act="switch-me">Not ${esc(me()?me().name:"you")}?</button>
+  </div>`;
   return `<div class="pad stack">
     ${unfinishedNotice()}${iphoneBrowserNote()}
     <div>
@@ -2953,7 +3143,7 @@ function scr_today(){
 
   return `
   <div class="pad stack">
-    ${unfinishedNotice()}${iphoneBrowserNote()}
+    ${catalogueNotice()}${unfinishedNotice()}${iphoneBrowserNote()}
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
@@ -3076,8 +3266,12 @@ function scr_loadout(){
       ${S.showPacker ? `<div class="stack-sm" style="margin-top:12px">
         <div class="seg" style="flex-wrap:wrap">
           <button data-packer="you" aria-pressed="${!packedBySomeoneElse()}" style="flex:1 0 30%">You</button>
-          ${SELLERS.map(x=>`<button data-packer="${x.id}" aria-pressed="${S.packedBy===x.id}" style="flex:1 0 30%">${esc(x.name.split(" ")[0])}</button>`).join("")}
+          ${othersOnPhone().length ? SELLERS.map(x=>`<button data-packer="${x.id}" aria-pressed="${S.packedBy===x.id}" style="flex:1 0 30%">${esc(x.name.split(" ")[0])}</button>`).join("") : ""}
         </div>
+        ${othersOnPhone().length ? "" : `<div class="field">
+          <label class="lbl" for="packerName">Or type who packed it</label>
+          <input id="packerName" type="text" autocomplete="off" maxlength="40" placeholder="Their name" value="${esc(packedBySomeoneElse() && !slr(S.packedBy) ? S.packedBy : "")}" data-set="packedBy">
+        </div>`}
         <div class="hint">Only change this if someone else counted the cooler. If the count turns out wrong, the shop needs to know whose count it was.</div>
       </div>` : ""}
     </div>
@@ -3339,10 +3533,10 @@ function scr_closeout(){
           ${S.travel.legs>0 ? `
             <div class="field" style="margin-top:8px">
               <label class="lbl" for="pass">Who did you drive?</label>
-              <select id="pass" data-set="passenger">
+              ${othersOnPhone().length ? `<select id="pass" data-set="passenger">
                 <option value="">Pick a person</option>
-                ${SELLERS.filter(x=>x.id!==S.me).map(x=>`<option value="${x.id}" ${S.travel.passenger===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
-              </select>
+                ${othersOnPhone().map(x=>`<option value="${x.id}" ${S.travel.passenger===x.id?"selected":""}>${esc(x.name)}</option>`).join("")}
+              </select>` : `<input id="pass" type="text" autocomplete="off" maxlength="40" placeholder="Their name" value="${esc(S.travel.passenger||"")}" data-set="passenger">`}
             </div>
             <div class="field">
               <label class="lbl" for="passm">To which market? (if you know)</label>
@@ -3464,7 +3658,7 @@ function closeoutMissing(){
   if(!t.mode) m.push({ label:"how you got there", sel:"[data-travel='van']" });
   if(t.mode==="van" && (t.legs===null || t.legs===undefined))
     m.push({ label:"did you drive someone", sel:"[data-legs='0']" });
-  if(t.mode==="van" && t.legs>0 && !t.passenger)
+  if(t.mode==="van" && t.legs>0 && !String(t.passenger || "").trim())
     m.push({ label:"who you drove", sel:"#pass" });
   if(t.mode==="own" && !t.gasMode)
     m.push({ label:"how the gas is covered", sel:"[data-gasmode='claim']" });
@@ -3498,8 +3692,8 @@ function scr_result(){
   const inHand = moneyIn();
   const dayTook = inHand + fromTill;             // everything the day sold
   // The rate of the market this day was worked at. A day carried into the next
-  // morning used today's market instead: Zack's Alameda Saturday showed
-  // Montclair's 20% and $24.40 less than the shop owed him.
+  // morning used today's market instead: a seller's Saturday showed Sunday's
+  // rate and $24.40 less than the shop owed them.
   const pay = dayPay(S.me, dayTook, (dayMarket() || MY_MARKET).id);
   const commission = pay.amount;
   const carGas = carAllowance();
@@ -3545,7 +3739,7 @@ function scr_result(){
           ? `<div class="kv"><span class="kv-k">Commission &mdash; ${Math.round(pay.rate*100)}% of ${money2(dayTook)}</span><span class="kv-v">${money2(pay.commission)}</span></div>`
           : `<div class="kv"><span class="kv-k">Your day rate</span><span class="kv-v">${money2(pay.base)}</span></div>
              <div class="kv"><span class="kv-k" style="color:var(--muted)">${Math.round(pay.rate*100)}% would have been ${money2(pay.commission)}</span><span class="kv-v" style="color:var(--muted)">&mdash;</span></div>`}
-        ${drivePay ? `<div class="kv"><span class="kv-k">Driving${S.travel.passenger?` &mdash; ${esc((slr(S.travel.passenger)||{}).name||"")}`:""}${S.travel.legs===2?", drop off &amp; pick up":", one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
+        ${drivePay ? `<div class="kv"><span class="kv-k">Driving${passengerName()?` &mdash; ${esc(passengerName())}`:""}${S.travel.legs===2?", drop off &amp; pick up":", one way"}</span><span class="kv-v">${money2(drivePay)}</span></div>` : ""}
         ${carGas ? `<div class="kv"><span class="kv-k">Gas for your own car</span><span class="kv-v">${money2(carGas)}</span></div>` : ""}
         ${fromOwn ? `<div class="kv"><span class="kv-k">Paid back for what you fronted</span><span class="kv-v">${money2(fromOwn)}</span></div>` : ""}
         <div class="kv kv-total"><span class="kv-k">Total</span><span class="kv-v">${money2(owed)}</span></div>
@@ -3791,7 +3985,7 @@ function owner_market(mid){
     const k = dayStats(x);
     const thin = k.fullPer>0 && k.yieldPer < k.fullPer*0.88;
     return `<tr>
-      <td><div class="who">${esc(fmtShort(x.dateObj))}</div><div class="sub">${esc(slr(x.sellerId).name)}</div></td>
+      <td><div class="who">${esc(fmtShort(x.dateObj))}</div><div class="sub">${esc((slr(x.sellerId) || {}).name || "\u2014")}</div></td>
       <td class="n">${k.sold}</td>
       <td class="n">${money(k.revenue)}</td>
       <td class="n"><span class="pill ${thin?"pill-warn":"pill-good"}">${money2(k.yieldPer)}</span></td>
@@ -3880,7 +4074,7 @@ function owner_market(mid){
       <div class="card-hd"><h3>The details</h3></div>
       <div class="card-pad">
         <div class="kv"><span class="kv-k">Runs</span><span class="kv-v">${esc(DAY_FULL[m.day])}s</span></div>
-        <div class="kv"><span class="kv-k">Normally worked by</span><span class="kv-v">${m.crew.length ? m.crew.map(c=>esc(slr(c).name.split(" ")[0])).join(", ") : "nobody named"}</span></div>
+        <div class="kv"><span class="kv-k">Normally worked by</span><span class="kv-v">${m.crew.length ? m.crew.map(c=>esc(((slr(c) || {}).name || "\u2014").split(" ")[0])).join(", ") : "nobody named"}</span></div>
         <div class="kv"><span class="kv-k">Stall fee</span><span class="kv-v">${money(feeOf(m))}${feeKnown(m)?"":GUESS}</span></div>
         <div class="kv"><span class="kv-k">Drive</span><span class="kv-v">${m.driveMin} min each way</span></div>
         <div class="kv"><span class="kv-k">Van</span><span class="kv-v">${vc.shareNames.length?"shares with "+esc(vc.shareNames.join(", ")):"own trip"}</span></div>
@@ -4014,7 +4208,7 @@ function owner_today(){
       /* This is the screen that says whose packs bring in the least, and it
          is the one thing in here that must never run on made-up days. The
          sample history exists to show what the screens do; put a real name
-         next to it and Nawid takes a number nobody earned to Habid.
+         next to it and Nawid takes a number nobody earned to a real seller.
 
          So until enough real days have been reported, it says what it will
          do and names nobody. */
@@ -4194,6 +4388,7 @@ function owner_people(){
       const sw = bestSwap();
       if(!sw || sw.gain < 40) return "";
       const aS=slr(sw.a.sellerId), bS=slr(sw.b.sellerId), aM=mkt(sw.a.marketId), bM=mkt(sw.b.marketId);
+      if(!aS || !bS || !aM || !bM) return "";
       const pct = (s,m)=>{ const v=Math.round(perfPct(s,m)*100); return (v>0?"+":v<0?"\u2212":"")+Math.abs(v)+"%"; };
       // whoever gains more by moving to the other's market goes first
       return `<div class="insight">
@@ -4575,10 +4770,15 @@ document.addEventListener("click", e => {
            make a test day look real, and signing into the real business
            while still in test mode would let a real day take a pretend date. */
         const nowTest = /test/i.test(AUTH.businessName || "");
-        if(nowTest !== TEST_MODE){
-          location.replace(nowTest ? location.pathname + location.search : location.pathname);
-          return;
-        }
+        /* Signing in also means this person's markets and pay, from the shop -
+           then the app starts over with them. Without an answer it still starts
+           over, and says the markets haven't loaded rather than "nothing on". */
+        S.codeError = "Getting your markets\u2026"; render();
+        try{ localStorage.removeItem(CATALOGUE_KEY); }catch(e){}
+        Promise.race([refreshCatalogue(), new Promise(r => setTimeout(r, 8000))]).finally(() => {
+          location.replace(nowTest !== TEST_MODE && !nowTest ? location.pathname : location.pathname + location.search);
+        });
+        return;
       } else {
         S.codeError = res.msg;
       }
@@ -4588,7 +4788,15 @@ document.addEventListener("click", e => {
   }
   if(t.dataset.act==="code-anyway"){ S.codeAnyway = true; render(); return; }
   if(t.dataset.act==="demo"){
-    AUTH.demo = true; saveAuth(); S.codeError=null; render(); window.scrollTo(0,0); return;
+    AUTH.demo = true; saveAuth(); S.codeError=null;
+    // Only ever the made-up people in the look-around.
+    if(CATALOGUE.source !== "demo"){ save(); location.replace(location.pathname); return; }
+    render(); window.scrollTo(0,0); return;
+  }
+  if(t.dataset.act==="catalogue-retry"){
+    toast("Trying\u2026");
+    refreshCatalogue().then(ok => { if(!ok) toast("Still no answer from the shop"); render(); });
+    return;
   }
   if(t.dataset.act==="leave-demo"){
     /* Back to the code screen. The look-around day is let go, not carried in:
@@ -4657,7 +4865,7 @@ document.addEventListener("click", e => {
   if(t.dataset.act==="switch-me"){
     /* This signs the phone out, and codes are single use - so the way back in
        is a new code from Nawid, which on a market morning he may not be awake
-       to send. It sat on the seller's own market screen reading "Bahir · not
+       to send. It sat on the seller's own market screen reading "<name> · not
        you?", one tap, no warning. Somebody curious about their own app locks
        themselves out of the day they are about to work.
 
@@ -4672,6 +4880,9 @@ document.addEventListener("click", e => {
     }
     S.me = null;
     if(!AUTH.demo){ AUTH.person=null; AUTH.name=null; AUTH.business=null; AUTH.role=null; AUTH.businessName=null; saveAuth(); }
+    /* The people and rota this phone was given leave with the person: a phone
+       handed on must not carry them, and the look-around must not show them. */
+    if(!AUTH.demo){ try{ localStorage.removeItem(CATALOGUE_KEY); }catch(e){} save(); location.replace(location.pathname); return; }
     /* Leaving the sandbox has to start the app over. Whether this phone is
        the sandbox is decided on the app's first line, so without a fresh
        start the orange stripe - and the pretend-day switch with it - stayed
@@ -4711,8 +4922,8 @@ document.addEventListener("click", e => {
     if(!Array.isArray(S.expenses)) S.expenses=[];
     /* No default. These two are opposites - till cash means the register is
        light by that much, my own money means the shop owes it back - and
-       guessing one put $11 of Zack's own money down as taken from the till,
-       on his first day. A money question answers itself for nobody. */
+       guessing one put $11 of a seller's own money down as taken from the till,
+       on their first day. A money question answers itself for nobody. */
     S.expenses.push({kind:"Gas", amount:"", source:null});
     render(); return;
   }
@@ -4812,6 +5023,8 @@ document.addEventListener("input", e => {
     const v = el.value;
     const blank = key === "opening" || key === "closing" ? undefined : 0;
     S[key][el.dataset.p] = v === "" ? blank : Math.max(0, Math.round(Number(v) || 0));
+  } else if(key === "passenger" && el.tagName === "INPUT"){
+    S.travel = Object.assign({}, S.travel, { passenger: el.value });   // a typed name
   } else if(key === "passenger" || key === "passengerMarket" || key === "gasAmount"){
     return;                       // these are selects; change is enough
   } else {
@@ -4865,7 +5078,7 @@ document.addEventListener("change", e => {
   const key = el.dataset.set;
   if(!key) return;
   if(key==="ownerNote"){ NOTE = el.value; return; }
-  if(key==="passenger"){ S.travel = Object.assign({}, S.travel, {passenger:el.value}); render(); return; }
+  if(key==="passenger"){ S.travel = Object.assign({}, S.travel, {passenger:el.value}); if(el.tagName !== "INPUT") render(); return; }
   if(key==="passengerMarket"){ S.travel = Object.assign({}, S.travel, {marketId:el.value}); render(); return; }
   if(key==="gasAmount"){ S.travel = Object.assign({}, S.travel, {gasAmount:el.value}); render(); return; }
   if(PER_PRODUCT.includes(key)){
@@ -4885,6 +5098,8 @@ document.addEventListener("change", e => {
    included - and the database lets only so many join from one connection an
    hour. It joins when a code is typed. */
 if(AUTH.token || AUTH.refresh) ensureSession().then(() => { if(AUTH.signinBroken) render(); });
+// The people and rota, fresh from the shop whenever there's signal.
+if(AUTH.business && !AUTH.demo) refreshCatalogue().then(() => render());
 
 setAsideOldDay();
 render();
