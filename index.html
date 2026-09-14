@@ -642,6 +642,7 @@ th.n{text-align:right}
   font:600 12px/1.35 var(--ui, system-ui, sans-serif); letter-spacing:.04em;
 }
 .testbar b{ letter-spacing:.10em }
+.demobar{ background:#2f5577 }
 .testbar button{
   flex:none; border:1px solid rgba(255,255,255,.55); background:rgba(0,0,0,.18);
   color:#fff; font:inherit; padding:5px 11px; border-radius:999px; cursor:pointer;
@@ -1635,6 +1636,32 @@ function cloudHeaders(extra){
   }, extra || {});
 }
 
+/* What was typed or pasted, as the codes it could be - best guess first.
+
+   Codes are texted by hand, and the right code pasted with one stray character
+   was refused and the seller told to ask Nawid for a new one: a full stop
+   copied off the end of the sentence, a hyphen, smart quotes, a hidden space
+   some messengers add, wide characters from another keyboard - or the whole
+   message, "Your PackOut code is E55LCK", which the box also cut short. A code
+   made by the app is six letters and numbers with no I, O, 0 or 1, so anything
+   else can go. Trying a wrong guess uses nothing up; only the right code does. */
+function codeCandidates(typed){
+  const raw = String(typed || "").normalize("NFKC").toUpperCase().replace(/[\u200B-\u200D\u2060\uFEFF]/g, "");
+  const out = [];
+  const add = c => { if(c && !out.includes(c)) out.push(c); };
+  const flat = raw.replace(/[^A-Z0-9]/g, "");
+  if(flat.length <= 8) add(flat);
+  // A whole message pasted in: its six-character words, ones with a number first, the last one first.
+  const words = raw.split(/[^A-Z0-9]+/).filter(w => /^[A-HJ-NP-Z2-9]{6}$/.test(w));
+  words.filter(w => /\d/.test(w)).reverse().forEach(add);
+  words.filter(w => !/\d/.test(w)).reverse().forEach(add);
+  // An older hand-made code with a hyphen in it, read the way codes were read before.
+  const old = raw.replace(/[\u2010-\u2015]/g, "-").replace(/\s+/g, "").trim();
+  if(old.includes("-") && old.length <= 12) add(old);
+  if(!out.length) add(flat);                // nothing code-like: let the check say so
+  return out.slice(0, 4);
+}
+
 // Turning a code into a person. The database checks it; the app only asks.
 async function redeemCode(code){
   const tok = await ensureSession();
@@ -1650,7 +1677,7 @@ async function redeemCode(code){
          already, run out, or never made in the first place - which is what
          happened to Suliman. All four have the same next step, so say it. */
       const raw = (d && d.message) || "";
-      return { ok:false, msg: /not valid/i.test(raw)
+      return { ok:false, invalid: /not valid/i.test(raw), msg: /not valid/i.test(raw)
         ? "That code isn't working. It may have been used already, or run out. Ask Nawid to send you a new one."
         : (raw || "That code did not work.") };
     }
@@ -1931,7 +1958,9 @@ function dayFromCloud(row, m){
      to show the tamale money only, chips taken off and till spending put back,
      under a label that said cash + card: Ali's Orinda card read $1,246 right
      above Cash $410 and Square $860, and every Saturday looked short of the bag
-     by the chip sales. Tamale money is still what money per pack is worked on. */
+     by the chip sales. Tamale money is still what money per pack is worked on.
+     Money spent out of the till isn't in it on either side: the seller's card
+     shows it below Brought in, then what the day took. */
   const broughtIn = Number(row.cash) + Number(row.card)
     + (row.other_pays||[]).reduce((a,o)=>a+(Number(o.amount)||0),0);
   const listPer = PRODUCTS.reduce((a,p)=>a+p.price,0)/PRODUCTS.length;
@@ -2794,7 +2823,7 @@ function scr_whoami(){
       <div class="field">
         <label class="lbl" for="codebox">Your code</label>
         <input id="codebox" type="text" inputmode="text" autocapitalize="characters"
-               autocomplete="off" placeholder="ABC123" maxlength="16"
+               autocomplete="off" placeholder="ABC123" maxlength="80"
                style="font-size:24px;letter-spacing:.18em;text-align:center;font-weight:600"
                value="${esc(S.codeTyped||"")}" data-set="codeTyped">
       </div>
@@ -3468,8 +3497,9 @@ function scr_result(){
         <div class="kv"><span class="kv-k">Cash taken</span><span class="kv-v">${money2(cash)}</span></div>
         <div class="kv"><span class="kv-k">Square</span><span class="kv-v">${money2(card)}</span></div>
         ${(S.otherPays||[]).filter(o=>Number(o.amount)).map(o=>`<div class="kv"><span class="kv-k">${esc(o.how||"Other")}</span><span class="kv-v">${money2(Number(o.amount)||0)}</span></div>`).join("")}
-        ${fromTill ? `<div class="kv"><span class="kv-k">Spent out of the till</span><span class="kv-v">${money2(fromTill)}</span></div>` : ""}
-        <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(gross)}</span></div>
+        <div class="kv kv-total"><span class="kv-k">Brought in</span><span class="kv-v">${money2(inHand)}</span></div>
+        ${fromTill ? `<div class="kv"><span class="kv-k">Spent out of the till</span><span class="kv-v">${money2(fromTill)}</span></div>
+        <div class="kv kv-total"><span class="kv-k">The day took</span><span class="kv-v">${money2(dayTook)}</span></div>` : ""}
       </div>
     </div>
 
@@ -4317,11 +4347,19 @@ function render(){
   /* Loud on purpose. The one thing a sandbox must never do is look like the
      real app - that is how a practice day ends up in the real books. */
   const th = $("testHost");
-  if(th) morphInto(th, !TEST_MODE ? "" : `<div class="testbar">
+  /* The look-around is marked the same way, on every screen, with the way out.
+     It used to look exactly like the real app until a day was already counted,
+     and nothing on it led back to typing a code: a seller who opened the link
+     before their code came, then worked a real market in it, had a day that
+     never reached the shop and no way to send it. */
+  if(th) morphInto(th, TEST_MODE ? `<div class="testbar">
       <span><b>TEST KITCHEN</b> &middot; nothing here is real${
         PRETEND_DAY ? ` &middot; pretending it is <b>${esc(DAY_FULL[PRETEND_DAY])}</b>` : ""}</span>
       <button data-act="test-reset">Wipe and start again</button>
-    </div>`);
+    </div>` : AUTH.demo ? `<div class="testbar demobar">
+      <span><b>JUST HAVING A LOOK</b> &middot; nothing here is sent</span>
+      <button data-act="leave-demo">I have a code</button>
+    </div>` : "");
   // Nobody lands on the owner screens without being an owner, however the
   // phone got there - an old saved state, or a tap from before this rule.
   if(S.mode==="owner" && !canSeeOwner()){ S.mode="seller"; S.marketOpen=null; }
@@ -4436,15 +4474,21 @@ document.addEventListener("click", e => {
   }
 
   if(t.dataset.act==="redeem"){
-    // Phone keyboards turn a typed hyphen into an en dash and drop spaces in,
-    // and a code that is right but punctuated wrong should still work.
-    const code = (S.codeTyped||"").toUpperCase()
-                   .replace(/[\u2010-\u2015]/g, "-")
-                   .replace(/\s+/g, "")
-                   .trim();
-    if(!code){ S.codeError="Type the code Nawid gave you."; render(); return; }
+    // A code that is right but punctuated wrong should still work - see codeCandidates.
+    const tries = codeCandidates(S.codeTyped);
+    if(!tries.length){ S.codeError="Type the code Nawid gave you."; render(); return; }
     S.codeError = "Checking\u2026"; render();
-    redeemCode(code).then(res => {
+    (async () => {
+      let res = null;
+      for(const c of tries){
+        res = await redeemCode(c);
+        if(res.ok || !res.invalid) break;     // signed in, or no signal: stop there
+      }
+      // Nothing that looks like a code was in there: say so, before sending them to Nawid.
+      if(!res.ok && res.invalid && tries[0].length !== 6)
+        res.msg = "A code is 6 letters and numbers \u2014 check what you typed. If it still doesn't work, ask Nawid for a new one.";
+      return res;
+    })().then(res => {
       if(res.ok){
         takePhone(AUTH.person); S.codeError = null; S.codeTyped = "";
         MY_MARKET = pickMyMarket(); MY_REC = recommendMarket(MY_MARKET.id);
@@ -4477,6 +4521,18 @@ document.addEventListener("click", e => {
   }
   if(t.dataset.act==="demo"){
     AUTH.demo = true; saveAuth(); S.codeError=null; render(); window.scrollTo(0,0); return;
+  }
+  if(t.dataset.act==="leave-demo"){
+    /* Back to the code screen. The look-around day is let go, not carried in:
+       carried, it would be sent to the shop as a real day the moment the code
+       went in. Anything it set aside on the phone goes with it. */
+    if(!confirm("Leave the look-around and type your code?\n\nNothing from the look-around is kept or sent.")) return;
+    delete AUTH.demo; saveAuth();
+    saveShelf(loadShelf().filter(e => e.business));
+    saveFixes(loadFixes().filter(f => f.business_id));
+    S = JSON.parse(JSON.stringify(BLANK)); save();
+    MY_MARKET = pickMyMarket(); MY_REC = recommendMarket(MY_MARKET.id);
+    render(); window.scrollTo(0,0); return;
   }
 
   if(t.dataset.me){
