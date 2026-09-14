@@ -1331,7 +1331,14 @@ function load(){
       return f;
     };
     // Work has begun once they have tapped Pack the cooler.
-    const begun = merged.screen !== "today" || !!merged.packedAt || !!merged.submittedAt;
+    /* Work has begun once they've tapped Pack the cooler - beginDay() stamps
+       startedAt and dayOwner right there. Going Back to the day screen before
+       "Cooler is packed" used to read as not begun, so a phone that closed the
+       app in between threw away the take-out counts they had just changed.
+       (dayOwner is only ever set by beginDay, so an old start time left by an
+       earlier version of the app can't pass for a real start.) */
+    const begun = merged.screen !== "today" || !!merged.packedAt || !!merged.submittedAt
+               || (!!merged.startedAt && !!merged.dayOwner);
     const otherDay = !!merged.dayOf && merged.dayOf !== today;
 
     if(!begun) return startOver();            // nothing started: nothing kept, nothing stamped
@@ -1675,7 +1682,18 @@ async function postDayRow(payload){
     headers: cloudHeaders({ "Prefer": "return=representation" }),
     body: JSON.stringify(body)
   });
-  const res = await post(payload);
+  let res = await post(payload);
+  /* 401 means the server did not accept this phone's pass - almost always an
+     hour-old pass that could not be renewed a moment ago because the server
+     hiccuped. That is not a dead sign-in, and telling the seller to get a new
+     code would throw away a sign-in that still works. Renew once and try again.
+     A sign-in that really is gone shows up in the renewal itself
+     (AUTH.signinBroken), and a phone that isn't part of the business is refused
+     with 403, not 401. */
+  if(res.status === 401){
+    AUTH.expires = 0;
+    if(await ensureSession()) res = await post(payload);
+  }
   if(res.status !== 400) return res;
   const d = await res.clone().json().catch(() => ({}));
   const missing = d.code === "PGRST204" || TRAVEL_FIELDS.some(k => String(d.message || "").includes(k));
@@ -1873,9 +1891,11 @@ async function sendDay(){
       }
       throw new Error("day 409");        // could not tell - treat as not sent
     }
-    if(res.status === 401 || res.status === 403){
+    if(res.status === 403 || (res.status === 401 && AUTH.signinBroken)){
       /* Refused because this phone's sign-in no longer belongs to the
-         business. Waiting for signal would never fix that. */
+         business, or the server said the sign-in itself is gone. Waiting for
+         signal would never fix that. A plain 401 after a hiccup is not this -
+         it falls through as a failed send and tries again. */
       S.sendError = "signin"; save(); return "signin";
     }
     if(!res.ok) throw new Error("day " + res.status);
@@ -2080,7 +2100,7 @@ async function sendOutboxNow(){
       else {
         const res = await postDayRow(e.payload);
         let dayId = null;
-        if(res.status === 401 || res.status === 403) problem = "signin";
+        if(res.status === 403 || (res.status === 401 && AUTH.signinBroken)) problem = "signin";
         else if(res.status === 409){
           // Already there. Ours only if it was sent under the same name.
           const g = await fetch(CLOUD.url + "/rest/v1/market_days"
@@ -2106,7 +2126,7 @@ async function sendOutboxNow(){
               body: JSON.stringify(rows)
             });
             if(rc.ok) ok = true;
-            else problem = (rc.status === 401 || rc.status === 403) ? "signin" : "failed";
+            else problem = rc.status === 403 ? "signin" : "failed";
           } else ok = true;
         }
       }
@@ -2115,6 +2135,19 @@ async function sendOutboxNow(){
     const item = list.find(x => x.id === e.id);
     if(item){ Object.assign(item, ok ? { sentAt:new Date().toISOString(), problem:null } : { problem }); saveOutbox(list); }
   }
+}
+
+/* A sign-in the server has already refused. It used to surface only after the
+   seller had counted everything and tapped Send; the phone knew as soon as it
+   opened. Said first, before any work, with the way back in. */
+function signinNotice(){
+  if(AUTH.demo || !AUTH.person || !AUTH.signinBroken) return "";
+  if(waitingDays().some(e => e.problem === "signin")) return "";   // the waiting-day card already says it
+  return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">Sign in again before you start</div>
+      <p class="note">This phone's sign-in has stopped working, so it can't send anything to the shop. Ask Nawid for a new code now &mdash; you can still count your day, and it goes up as soon as you're back in.</p>
+      <button class="btn" data-act="resignin">I have a new code</button>
+    </div>`;
 }
 
 /* What a seller sees on their own home screen while a day is still waiting. */
@@ -2372,7 +2405,7 @@ function scr_dayoff(){
       <h1 class="page" style="margin-top:6px">Nothing on today</h1>
       <p class="note" style="margin-top:5px">No market for ${esc(me()?me().name:"you")} today.</p>
     </div>
-    ${outboxNotice()}
+    ${signinNotice()}${outboxNotice()}
     ${next.length ? `<div class="card">
       <div class="card-hd"><h3>Your markets</h3></div>
       ${next.map(x=>`<div class="step-row"><div class="grow"><div class="step-name">${esc(x)}</div></div></div>`).join("")}
@@ -2418,7 +2451,7 @@ function scr_today(){
       <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.hours ? esc(MY_MARKET.hours) : MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}</p>
 
     </div>
-    ${outboxNotice()}
+    ${signinNotice()}${outboxNotice()}
 
     <div class="card stripe stripe-live">
       <div class="card-hd"><h3>Take ${r.total} items</h3><span class="pill pill-live"><span class="dot"></span>Ready</span></div>
@@ -3013,15 +3046,21 @@ function scr_result(){
       </div>
     </div>
 
-    <div class="card stripe stripe-good">
+    <div class="card stripe stripe-${S.sentAt || AUTH.demo ? "good" : "warn"}">
       <div class="card-hd">
-        <div><h3>Sent in</h3><div class="sub" style="margin-top:3px">${esc(
-          S.sentAt ? new Date(S.sentAt).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"})
-                   : (S.submittedAt || ""))}</div></div>
-        <span class="pill pill-good">Locked</span>
+        ${S.sentAt || AUTH.demo
+          ? `<div><h3>Sent in</h3><div class="sub" style="margin-top:3px">${esc(
+               S.sentAt ? new Date(S.sentAt).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}) : (S.submittedAt || ""))}</div></div>
+             <span class="pill pill-good">Locked</span>`
+          /* It used to say "Sent in - Locked" here even while the card above
+             said the day could not go in. Two cards, opposite answers. */
+          : `<div><h3>Counted up</h3><div class="sub" style="margin-top:3px">${esc(S.submittedAt || "")}</div></div>
+             <span class="pill pill-warn">Not at the shop yet</span>`}
       </div>
       <div class="card-pad stack-sm">
-        <p class="note">These numbers are final. Nothing in here can be quietly changed now.</p>
+        <p class="note">${S.sentAt || AUTH.demo
+          ? "These numbers are final. Nothing in here can be quietly changed now."
+          : "These are the numbers that will go to the shop, exactly as they are. If one is wrong, ask for a fix below and it goes with them."}</p>
         ${fixesForDay().map(f => {
           /* Say exactly where each request is. "Sent to the shop" only once the
              shop has answered that it has it - never on the tap. */
