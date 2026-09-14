@@ -7,7 +7,7 @@
    Bump CACHE whenever the app file changes, or phones will keep serving the
    old one. */
 
-const CACHE = "packout-8e01fd67";
+const CACHE = "packout-0c9d26fd";
 
 // The typefaces, so the app still looks like itself with no signal. Public
 // files with nobody's data in them - the one kind of outside request worth
@@ -93,6 +93,14 @@ self.addEventListener("fetch", event => {
           if (res && res.ok && res.type === "basic") {
             const copy = res.clone();
             caches.open(CACHE).then(c => c.put("./index.html", copy)).catch(() => {});
+          }
+          /* The site answering with an error is no reason to show a seller an error
+             page while the app is sitting on the phone. On 14 Sep the site was
+             switched off for about half an hour: every phone with signal got
+             GitHub's "404", and only phones with no signal opened the app. A
+             redirect isn't an error and still goes through. */
+          if (res && res.status >= 400) {
+            return caches.match("./index.html").then(r => r || res);
           }
           return res;
         })

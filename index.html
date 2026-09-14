@@ -1293,7 +1293,8 @@ const BLANK = {
   secondSheetId:null,            // if refused as a second sheet, the report that tells the shop
   dayRowId:null,                 // a day taken back off the shelf: the id its sheet goes in under
   dayOwner:null,                 // whose day this is, from the moment it began
-  codeTyped:"", codeError:null
+  codeTyped:"", codeError:null,
+  codeAnyway:false               // on an iPhone browser, chose to type the code there rather than install first
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
 SEEN_REV = storedRev();
@@ -2854,14 +2855,36 @@ async function keepAwake(on){
    SELLER SCREENS
    ========================================================= */
 
+/* On an iPhone the app added to the Home Screen is a separate phone to the
+   browser: it can't see a sign-in made in Safari. A seller who typed their code
+   in Safari and then added PackOut to the Home Screen opened the icon to the
+   code screen, with the code already used - found on the user's own iPhone,
+   14 Sep. navigator.standalone exists only on iPhone and iPad, and is false in
+   the browser there (iPads included, whatever they call themselves). */
+const IN_IPHONE_BROWSER = navigator.standalone === false;
+function iphoneBrowserNote(){
+  if(!IN_IPHONE_BROWSER || !AUTH.person || AUTH.demo) return "";
+  return `<div class="hint">You're signed in to PackOut in this browser &mdash; keep using it here. Adding it to your Home Screen would need a new code from Nawid.</div>`;
+}
+
 function scr_whoami(){
   const err = S.codeError;
+  const installFirst = IN_IPHONE_BROWSER && !S.codeAnyway;
   return `<div class="pad stack">
     <div>
       <div class="lbl">First time on this phone</div>
       <h1 class="page" style="margin-top:6px">Enter your code</h1>
       <p class="note" style="margin-top:5px">Nawid sends you a short code, six letters and numbers. You type it once, on your own phone, and never again.</p>
     </div>
+    ${installFirst ? `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">On an iPhone, do this first</div>
+      <p class="note"><b>Put PackOut on your Home Screen, then type your code there.</b> A code only works once, and the Home Screen app can't see a code typed here.</p>
+      <div class="step-row"><div class="grow"><div class="step-name">1. Open this page in Safari</div><div class="step-sub">If it opened inside another app, look for &ldquo;Open in Safari&rdquo;.</div></div></div>
+      <div class="step-row"><div class="grow"><div class="step-name">2. Tap Share, then &ldquo;Add to Home Screen&rdquo;</div></div></div>
+      <div class="step-row"><div class="grow"><div class="step-name">3. Open PackOut from your Home Screen and type your code there</div></div></div>
+      <button class="btn btn-quiet btn-sm" data-act="code-anyway">I can't &mdash; let me type my code here</button>
+    </div>` : ""}
+    ${installFirst ? "" : `${IN_IPHONE_BROWSER ? `<div class="hint" style="color:var(--bad)">Signed in here, PackOut only works in this browser. Adding it to your Home Screen later would need a new code from Nawid.</div>` : ""}
     <div class="card card-pad stack-sm">
       <div class="field">
         <label class="lbl" for="codebox">Your code</label>
@@ -2872,7 +2895,7 @@ function scr_whoami(){
       </div>
       ${err ? `<div class="hint" style="color:var(--bad)">${esc(err)}</div>` : ""}
       <button class="btn" data-act="redeem">Use this code</button>
-    </div>
+    </div>`}
     <div class="hint">
       No password, and nothing to remember. The code stops working after you
       use it, so passing it on gets nobody anything.
@@ -2885,7 +2908,7 @@ function scr_dayoff(){
   const next = MARKETS.filter(m => m.crew.includes(S.me))
     .map(m => DAY_FULL[m.day] + " at " + m.name);
   return `<div class="pad stack">
-    ${unfinishedNotice()}
+    ${unfinishedNotice()}${iphoneBrowserNote()}
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">Nothing on today</h1>
@@ -2930,7 +2953,7 @@ function scr_today(){
 
   return `
   <div class="pad stack">
-    ${unfinishedNotice()}
+    ${unfinishedNotice()}${iphoneBrowserNote()}
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
@@ -4563,6 +4586,7 @@ document.addEventListener("click", e => {
     });
     return;
   }
+  if(t.dataset.act==="code-anyway"){ S.codeAnyway = true; render(); return; }
   if(t.dataset.act==="demo"){
     AUTH.demo = true; saveAuth(); S.codeError=null; render(); window.scrollTo(0,0); return;
   }
