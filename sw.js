@@ -7,7 +7,12 @@
    Bump CACHE whenever the app file changes, or phones will keep serving the
    old one. */
 
-const CACHE = "packout-22161243";
+const CACHE = "packout-54e65e44";
+
+// The typefaces, so the app still looks like itself with no signal. Public
+// files with nobody's data in them - the one kind of outside request worth
+// keeping.
+const FONT_HOSTS = ["https://fonts.googleapis.com", "https://fonts.gstatic.com"];
 
 const SHELL = [
   "./",
@@ -32,6 +37,15 @@ self.addEventListener("activate", event => {
   event.waitUntil(
     caches.keys()
       .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+      // Anything from another site that an older version stored - database
+      // answers with cash in them, the owner's list of sign-in codes - goes,
+      // even if this cache happened to keep its name.
+      .then(() => caches.open(CACHE))
+      .then(c => c.keys().then(reqs => Promise.all(
+        reqs.filter(r => { const o = new URL(r.url).origin;
+                           return o !== self.location.origin && !FONT_HOSTS.includes(o); })
+            .map(r => c.delete(r))
+      )))
       .then(() => self.clients.claim())
   );
 });
@@ -50,6 +64,17 @@ function freshen(request, cached) {
 self.addEventListener("fetch", event => {
   const req = event.request;
   if (req.method !== "GET") return;
+
+  /* Only the app's own files. Everything else - above all the database -
+     goes straight to the network, untouched.
+
+     This used to answer every request from its store first, the database's
+     included. So the owner's screen showed the load before last, the check
+     for "did my day really arrive?" could read an old "not there" and send a
+     day twice, and days with cash in them and the owner's list of codes sat
+     on the phone after signing out, for whoever picked it up next. */
+  const origin = new URL(req.url).origin;
+  if (origin !== self.location.origin && !FONT_HOSTS.includes(origin)) return;
 
   // A tap on the home screen icon is a navigation. If the network is gone,
   // it still has to open, so fall back to the cached app.

@@ -247,6 +247,7 @@ button{font-family:inherit;color:inherit}
   display:flex;gap:2px;padding:3px;border-radius:999px;
   background:var(--glass-3);border:1px solid var(--glass-line-2);box-shadow:var(--rim);
 }
+.modesw[hidden]{display:none}
 .modesw button{
   border:0;background:transparent;cursor:pointer;
   font-size:12.5px;font-weight:600;padding:7px 15px;border-radius:999px;
@@ -1096,17 +1097,37 @@ for(let w=8; w>=1; w--){
    day. No server and no password - it stands in for the sign-in code from the
    backend plan until there is something to enrol against. */
 function me(){ return S.me ? slr(S.me) : null; }
+
+/* The owner screens show every seller's pay, whose packs bring in the least,
+   and what the whole crew is owed. The Owner button used to sit on every
+   phone and check nothing: one tap from a seller's own phone showed all of
+   it - and a seller had asked, in so many words, that other people not be
+   able to see his details.
+
+   Only a phone that signed in with an owner's code gets them. "Just having a
+   look" keeps them, because nothing on that phone is anybody's real day.
+   This hides the screens; what stops a seller's phone reading other people's
+   days at all is the database's rules, not this. */
+function canSeeOwner(){ return !!AUTH.demo || AUTH.role === "owner"; }
 function myMarketToday(){
   const today = MARKETS.filter(m => m.day === DAYS[TODAY.getDay()]);
   if(S.me){
     const mine = today.filter(m => m.crew.includes(S.me));
     return mine[0] || null;          // null means nothing on for them today
   }
-  return today[0] || MARKETS[0];
+  /* Nobody signed in. There is no "my" market - handing back the first one
+     on the list is what stamped a stranger's market onto a phone before its
+     seller had signed in. Screens that need something to draw with use
+     marketOrAny(). */
+  return null;
 }
 // Every screen below assumes a market, so keep one to draw with even when the
 // day is empty - the empty state is what actually gets shown.
 function marketOrAny(){ return myMarketToday() || MARKETS[0]; }
+/* A day already under way on this phone. It is shown whether or not the
+   seller has a market today: past midnight, or with a counted day still
+   waiting for the shop, "nothing on today" would hide it. */
+function dayInHand(){ return !!(S.submittedAt || (S.startedAt && S.marketId && !S.sentAt)); }
 
 /* Today is whichever markets run on today's weekday - fourteen of them on a
    Sunday. A slot with nobody named is shown as unassigned rather than hidden:
@@ -1183,6 +1204,8 @@ let AUTH = (() => {
 function saveAuth(){ try{ localStorage.setItem(AUTH_KEY, JSON.stringify(AUTH)); }catch(e){} }
 
 const STORE_KEY = "packout.v2";
+// Fixes asked for, kept apart from the day so they outlive it. See sendFixes.
+const FIX_KEY   = "packout.fixes.v1";
 const NOTE_KEY  = "packout.note.v1";
 /* Empty until somebody writes one. A default here reads to a seller as an
    instruction from Nawid that Nawid never gave. */
@@ -1212,24 +1235,28 @@ const BLANK = {
   cashCounted:"", cardTotal:"", otherPays:[], chipsSold:"", float:150,
   soldOut:null, soldOutAt:"", note:"", lead:"",
   showDamaged:false, showLead:false, showCounts:false,
-  submittedAt:null, showFix:false, corrections:[], marketOpen:null,
+  // corrections is the old, never-sent list; see adoptOldFixes. fixDraft
+  // keeps a half-typed request alive through a redraw.
+  submittedAt:null, showFix:false, corrections:[], fixDraft:"", marketOpen:null,
   packedAt:null, discounts:"", paidOut:"",
   expenses:[],
   travel:{ mode:"van", legs:0, passenger:"", marketId:"", gasMode:"claim", gasAmount:"" },
   packedBy:"you", showPacker:false, me:null, dayOf:null, marketId:null, startedAt:null, sentAt:null, sendError:null,
+  submittedBy:null,              // who counted this day - it is sent under their name
   codeTyped:"", codeError:null
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
 loadNote();
 
 function save(){
-  try{ S.dayOf = S.dayOf || todayStamp();
-       // Stamped once, from a real market only. On a day off there is no
-       // market to stamp, and guessing one is what filed a seller's takings
-       // against a market three hours away that he has never worked.
-       if(!S.marketId){ const m = myMarketToday(); if(m) S.marketId = m.id; }
-       S.startedAt = S.startedAt || Date.now();
-       localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
+  /* Saving never decides what day this is. It used to stamp the date, the
+     market and the start time the first time anything was saved - which is
+     the moment the app opens, code screen included. A phone opened on a
+     Thursday evening, or before its seller had even signed in, carried that
+     stamp into the next market it worked: takings filed under the wrong day
+     and the wrong market. The stamp belongs to the moment work begins; see
+     beginDay(). */
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(S)); return true; }
   catch(e){
     // Almost always the photo pushing past the storage limit.
     // The counts are the paycheck; the photo is not. Drop it and keep the numbers.
@@ -1270,6 +1297,9 @@ function load(){
     merged.samples  = Object.assign({}, fresh.samples,  obj(saved.samples));
     merged.damaged  = Object.assign({}, fresh.damaged,  obj(saved.damaged));
     if(!Array.isArray(merged.corrections)) merged.corrections = [];
+    // Old never-sent fixes move to the queue now, before this day can be
+    // cleared below and take them with it. Never allowed to cost the day.
+    try{ adoptOldFixes(merged); }catch(e){}
     if(!Array.isArray(merged.expenses)) merged.expenses = [];
     merged.travel = Object.assign({mode:"van",legs:0,passenger:"",marketId:"",gasMode:"claim",gasAmount:""}, merged.travel || {});
     delete merged.drive;
@@ -1290,28 +1320,62 @@ function load(){
        cooler. Who they are always carries over. */
     const today = todayStamp();
     const AGE_LIMIT = 20 * 60 * 60 * 1000;
-    const newCalendarDay = !!merged.dayOf && merged.dayOf !== today;
-    const tooOld = merged.startedAt
-      ? (Date.now() - merged.startedAt) > AGE_LIMIT
-      : newCalendarDay;                  // days saved before this rule existed
-    // A sent day stays on screen until the date changes, so they can look at
-    // what they sent. An unsent day stays until it is genuinely old.
-    if(merged.sentAt ? newCalendarDay : tooOld){
-      const fresh = JSON.parse(JSON.stringify(BLANK));
-      fresh.me = merged.me;
-      fresh.dayOf = today;
-      fresh.startedAt = Date.now();
-      return fresh;
+    // Who they are, and which screen they like, always carry over.
+    const startOver = () => {
+      const f = JSON.parse(JSON.stringify(BLANK));
+      f.me = merged.me; f.mode = merged.mode; f.tab = merged.tab;
+      return f;
+    };
+    // Work has begun once they have tapped Pack the cooler.
+    const begun = merged.screen !== "today" || !!merged.packedAt || !!merged.submittedAt;
+    const otherDay = !!merged.dayOf && merged.dayOf !== today;
+
+    if(!begun) return startOver();            // nothing started: nothing kept, nothing stamped
+
+    if(merged.sentAt){
+      // At the shop. Stays on screen until the date changes, so they can
+      // look at what they sent.
+      return otherDay ? startOver() : merged;
     }
-    merged.dayOf = merged.dayOf || today;
-    merged.startedAt = merged.startedAt || Date.now();
+
+    if(merged.submittedAt){
+      /* Counted up, and not at the shop yet. This used to be thrown away
+         once it was twenty hours old - takings, money fronted, receipts -
+         while the screen said nothing is lost. It is never thrown away now.
+         If a new market day has come round, it is set aside in the queue of
+         days still going to the shop (see parkWaitingDay) and keeps trying. */
+      if(otherDay) merged.parkMe = true;
+      return merged;
+    }
+
+    /* Begun, never counted up. An evening market counted after midnight is
+       well inside twenty hours of starting. Past that it has been abandoned:
+       it is set aside, not deleted, so what went out is still on the phone. */
+    const old = merged.startedAt ? (Date.now() - merged.startedAt) > AGE_LIMIT : otherDay;
+    if(old) merged.archiveMe = true;
     return merged;
   }catch(e){ return null; }
 }
 function reset(){ S = JSON.parse(JSON.stringify(BLANK)); save(); render(); }
 
+/* The day begins here, when the seller taps Pack the cooler - and only here.
+   Its date and its market are this seller's market today, so a phone that sat
+   open the evening before, or was opened before anybody signed in, cannot
+   hand a stale stamp to the day actually being worked. */
+function beginDay(){
+  if(S.startedAt && S.dayOf && S.marketId) return;
+  const m = myMarketToday();
+  if(!S.me || !m) return;
+  S.startedAt = S.startedAt || Date.now();
+  S.dayOf = todayStamp();
+  S.marketId = m.id;
+}
+
 if(AUTH.person && !S.me){ S.me = AUTH.person; }
-let MY_MARKET = marketOrAny();
+/* The market a begun day belongs to, if there is one - an evening market
+   counted after midnight, or a counted day still waiting for the shop, is
+   still that market even though the calendar has moved on. */
+let MY_MARKET = (S.marketId && S.startedAt && mkt(S.marketId)) || marketOrAny();
 let MY_REC = recommendMarket(MY_MARKET.id);
 
 /* =========================================================
@@ -1349,26 +1413,58 @@ const CLOUD = {
    what it may see. A phone with no code sees nothing at all, which is the
    answer to "so not anybody can access my name". */
 
-async function ensureSession(){
-  if(AUTH.demo) return null;
-  const now = Date.now();
-  if(AUTH.token && AUTH.expires && now < AUTH.expires - 60000) return AUTH.token;
+/* Renewing the sign-in.
 
-  // Expired but refreshable - a seller should never be logged out mid-market.
+   A phone's sign-in lasts an hour and renews in the background. This used to
+   treat ANY failed renewal - no signal, a busy server, or two parts of the app
+   renewing at the same moment - as a reason to sign up again from scratch.
+   That made a brand-new identity with no connection to the business, while
+   the screen still said the seller's name. Every send after that was refused,
+   and the seller was told "Waiting for signal... Nothing is lost", forever.
+
+   Now there is only ever one renewal in flight, and a phone that is signed in
+   is never given a new identity behind its back:
+   - no answer, or a busy server: keep everything and try again later;
+   - the server says this sign-in is gone for good: say so, plainly, and keep
+     the day on the phone until they sign in again.
+   Only a phone that has not joined a business yet may start a fresh one. */
+let SESSION_FLIGHT = null;
+function ensureSession(){
+  if(AUTH.demo) return Promise.resolve(null);
+  if(AUTH.token && AUTH.expires && Date.now() < AUTH.expires - 60000) return Promise.resolve(AUTH.token);
+  if(!SESSION_FLIGHT){
+    SESSION_FLIGHT = renewSession().finally(() => { SESSION_FLIGHT = null; });
+  }
+  return SESSION_FLIGHT;
+}
+
+async function renewSession(){
+  const enrolled = !!(AUTH.person && AUTH.business);
+
   if(AUTH.refresh){
+    let r;
     try{
-      const r = await fetch(CLOUD.url + "/auth/v1/token?grant_type=refresh_token", {
+      r = await fetch(CLOUD.url + "/auth/v1/token?grant_type=refresh_token", {
         method:"POST",
         headers:{ "apikey": CLOUD.key, "Content-Type":"application/json" },
         body: JSON.stringify({ refresh_token: AUTH.refresh })
       });
-      if(r.ok){
-        const d = await r.json();
-        AUTH.token = d.access_token; AUTH.refresh = d.refresh_token;
-        AUTH.expires = Date.now() + (d.expires_in || 3600) * 1000;
-        saveAuth(); return AUTH.token;
-      }
-    }catch(e){ /* fall through to a new anonymous identity */ }
+    }catch(e){ return null; }                 // no signal: nothing is changed
+    if(r.ok){
+      const d = await r.json();
+      AUTH.token = d.access_token; AUTH.refresh = d.refresh_token;
+      AUTH.expires = Date.now() + (d.expires_in || 3600) * 1000;
+      AUTH.signinBroken = false;
+      saveAuth(); return AUTH.token;
+    }
+    if(r.status !== 400 && r.status !== 401) return null;   // busy or down: later
+    // The server answered that this sign-in is gone for good.
+    if(enrolled){ AUTH.signinBroken = true; saveAuth(); return null; }
+  }
+
+  if(enrolled){
+    // Signed in, with nothing left to renew with. Never swap in a stranger.
+    AUTH.signinBroken = true; saveAuth(); return null;
   }
 
   try{
@@ -1381,6 +1477,7 @@ async function ensureSession(){
     const d = await r.json();
     AUTH.token = d.access_token; AUTH.refresh = d.refresh_token;
     AUTH.expires = Date.now() + (d.expires_in || 3600) * 1000;
+    AUTH.signinBroken = false;
     saveAuth(); return AUTH.token;
   }catch(e){ return null; }
 }
@@ -1399,7 +1496,11 @@ async function resetTest(){
     const d = await r.json();
     if(!r.ok) throw new Error((d && d.message) || r.status);
     // Start the phone over too, or it would still be holding the old day.
+    // Its fixes go with it: the days they pointed at no longer exist.
     localStorage.removeItem(STORE_KEY);
+    localStorage.removeItem(FIX_KEY);
+    localStorage.removeItem(OUTBOX_KEY);
+    localStorage.removeItem(SHELF_KEY);
     S = JSON.parse(JSON.stringify(BLANK));
     S.me = AUTH.person; S.dayOf = todayStamp(); S.startedAt = Date.now();
     save(); REAL_DAYS = null;
@@ -1447,6 +1548,9 @@ async function redeemCode(code){
     /* Which business this phone joined. Only used to know whether it is the
        sandbox - and it has to be stored, because the check runs before
        anything is fetched, on the very first line of the app. */
+    // Never carry the last business's name into this one: a failed lookup
+    // must read as "not the sandbox", not as whatever this phone was before.
+    AUTH.businessName = null; saveAuth();
     try{
       const b = await fetch(CLOUD.url + "/rest/v1/businesses?select=name&id=eq."
         + encodeURIComponent(AUTH.business), { headers: cloudHeaders() });
@@ -1470,8 +1574,8 @@ function dayPayload(){
     market_id: m.id,
     market_name: m.name,
     day_date: S.dayOf || todayStamp(),
-    seller_id: S.me || null,
-    seller_name: who ? who.name : null,
+    seller_id: S.submittedBy || S.me || null,
+    seller_name: (slr(S.submittedBy || S.me) || who || {}).name || null,
     packed_by: packedByName(),
     cash: Number(S.cashCounted) || 0,
     card: Number(S.cardTotal) || 0,
@@ -1523,10 +1627,33 @@ async function loadRealDays(){
     const rows = await res.json();
     REAL_DAYS = {};
     rows.forEach(r => REAL_DAYS[r.market_id] = r);
+    await loadRealFixes(today);
     return true;
   }catch(e){
     REAL_DAYS = REAL_DAYS || {};      // an empty answer, not a broken screen
     return false;
+  }
+}
+
+/* Fixes sellers have asked for on today's days, keyed by market. Fetched on
+   its own rather than folded into the days: if the corrections table is not
+   there yet, the days must still show. REAL_FIXES_OK says whether we could
+   actually look, so an empty list is never mistaken for "nobody asked". */
+let REAL_FIXES = {}, REAL_FIXES_OK = false;
+async function loadRealFixes(day){
+  try{
+    const res = await fetch(CLOUD.url + "/rest/v1/day_corrections"
+      + "?business_id=eq." + encodeURIComponent(CLOUD.business)
+      + "&day_date=eq." + encodeURIComponent(day)
+      + "&select=id,market_id,seller_name,message,asked_at,received_at&order=asked_at.asc",
+      { headers: cloudHeaders() });
+    if(!res.ok) throw new Error(String(res.status));
+    const rows = await res.json();
+    REAL_FIXES = {};
+    rows.forEach(r => (REAL_FIXES[r.market_id] ||= []).push(r));
+    REAL_FIXES_OK = true;
+  }catch(e){
+    REAL_FIXES = {}; REAL_FIXES_OK = false;
   }
 }
 
@@ -1541,12 +1668,13 @@ function dayFromCloud(row, m){
     + Number(row.spent_from_till);
   const packMoney = gross - (row.chips_sold * CHIPS.price);
   const listPer = PRODUCTS.reduce((a,p)=>a+p.price,0)/PRODUCTS.length;
+  const fixList = (REAL_FIXES[row.market_id] || []);
   return {
     name: row.seller_name || "Nobody assigned",
     phone: null, sold, rev: Math.round(packMoney), out,
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
-    overSend: 0, fixes: 0,
+    overSend: 0, fixes: fixList.length, fixList, row,
     // Pay, plus whatever they fronted. Fronted money is not sales, so it never
     // counts towards commission - it is simply owed back.
     owed: dayPay(row.seller_id, gross, row.market_id).amount + Number(row.fronted || 0),
@@ -1568,15 +1696,17 @@ async function dayAlreadyThere(){
       + "?business_id=eq." + encodeURIComponent(CLOUD.business)
       + "&market_id=eq."   + encodeURIComponent(m.id)
       + "&day_date=eq."    + encodeURIComponent(S.dayOf || todayStamp())
-      + "&select=seller_id,cash,card",
+      + "&select=id,seller_id",
       { headers: cloudHeaders() });
     if(!r.ok) return null;
     const rows = await r.json();
     if(!rows.length) return false;
     const row = rows[0];
-    const sameMoney = Number(row.cash) === (Number(S.cashCounted) || 0)
-                   && Number(row.card) === (Number(S.cardTotal)   || 0);
-    return row.seller_id === S.me && sameMoney;
+    /* Ours means counted by the person this day belongs to. It used to also
+       require the cash and card to match exactly, so a seller who corrected a
+       figure after a failed send had their own day called somebody else's. */
+    dayAlreadyThere.id = row.id;
+    return row.seller_id === (S.submittedBy || S.me);
   }catch(e){ return null; }
 }
 
@@ -1610,6 +1740,7 @@ async function sendDay(){
   if(!dayMarket()) return "local";     // nothing to file it against
   try{
     await ensureSession();
+    if(AUTH.signinBroken){ S.sendError = "signin"; save(); return "signin"; }
     const res = await fetch(CLOUD.url + "/rest/v1/market_days", {
       method: "POST",
       headers: cloudHeaders({ "Prefer": "return=representation" }),
@@ -1624,9 +1755,22 @@ async function sendDay(){
          So find out which. Only our own day counts as sent. */
       const mine = await dayAlreadyThere();
       if(mine === true){
+        /* The day is in - but a send that dropped between the day and its
+           counts leaves a day with no counts, and calling that "sent" loses
+           every flavour. Put any missing counts in; ones already there are
+           left alone. */
+        const rows = countRows(dayAlreadyThere.id);
+        if(rows.length){
+          const rc = await fetch(CLOUD.url + "/rest/v1/day_counts?on_conflict=market_day_id,product_id", {
+            method:"POST", headers: cloudHeaders({ "Prefer":"resolution=ignore-duplicates,return=minimal" }),
+            body: JSON.stringify(rows)
+          });
+          if(!rc.ok) throw new Error("counts " + rc.status);
+        }
         S.sentAt = S.sentAt || new Date().toISOString();
         S.sendError = null;
         save();
+        sendFixes().then(() => render());
         return "sent";
       }
       if(mine === false){
@@ -1635,6 +1779,11 @@ async function sendDay(){
         return "clash";
       }
       throw new Error("day 409");        // could not tell - treat as not sent
+    }
+    if(res.status === 401 || res.status === 403){
+      /* Refused because this phone's sign-in no longer belongs to the
+         business. Waiting for signal would never fix that. */
+      S.sendError = "signin"; save(); return "signin";
     }
     if(!res.ok) throw new Error("day " + res.status);
     const day = (await res.json())[0];
@@ -1649,12 +1798,261 @@ async function sendDay(){
     S.sentAt = new Date().toISOString();
     S.sendError = null;
     save();
+    // A fix asked for before the day got a signal can follow it in now.
+    sendFixes().then(() => render());
     return "sent";
   }catch(e){
     S.sendError = String(e.message || e);
     save();
     return "failed";
   }
+}
+
+/* =========================================================
+   Asking the shop to fix a day that is already in
+
+   This button used to put the request in the phone's own storage and say
+   "Sent to the shop". Nothing ever left the phone. A seller who counted
+   wrong and did the honest thing was told it was handled.
+
+   A day is locked, so a fix is its own record, pointing at the day. It is
+   kept in its own key - not inside the day - because the day is wiped when
+   the next one starts, and a request that has not reached the shop yet must
+   not go with it. Each one carries an id made here on the phone, so sending
+   it twice on bad signal can never make two.
+
+   Nothing here calls a request sent until the shop has answered that it
+   has it.
+   ========================================================= */
+
+function loadFixes(){
+  try{ const r = JSON.parse(localStorage.getItem(FIX_KEY)); return Array.isArray(r) ? r : []; }
+  catch(e){ return []; }
+}
+function saveFixes(list){
+  try{ localStorage.setItem(FIX_KEY, JSON.stringify(list)); return true; }
+  catch(e){ return false; }
+}
+function newId(){
+  if(window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16); crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2,"0")).join("");
+  return h.slice(0,8)+"-"+h.slice(8,12)+"-"+h.slice(12,16)+"-"+h.slice(16,20)+"-"+h.slice(20);
+}
+// The fixes asked about the day on this phone right now.
+function fixesForDay(){
+  if(!S.marketId || !S.dayOf) return [];
+  return loadFixes().filter(f => f.market_id === S.marketId && f.day_date === S.dayOf
+                              && (AUTH.demo || f.business_id === AUTH.business));
+}
+
+/* Before this, a fix lived only inside the day as {text, at} and was never
+   sent. Anything a seller asked that way is still owed to the shop, so move
+   it into the queue once, against the day it was asked about. */
+function adoptOldFixes(day){
+  if(!day || !Array.isArray(day.corrections) || !day.corrections.length) return;
+  if(AUTH.demo || !AUTH.business || !day.marketId || !day.dayOf) return;
+  const list = loadFixes();
+  day.corrections.forEach(c => {
+    if(!c || !c.text) return;
+    list.push({ id:newId(), business_id:AUTH.business, market_id:day.marketId, day_date:day.dayOf,
+                message: c.text + (c.at ? " (asked at " + c.at + ")" : ""),
+                asked_at:new Date().toISOString(), sentAt:null, problem:null });
+  });
+  if(saveFixes(list)) day.corrections = [];
+}
+
+function sendFixes(){
+  if(AUTH.demo || !AUTH.business) return Promise.resolve();
+  // Already sending: go round once more when that finishes, so a fix that
+  // was waiting on its day is not skipped because the day landed mid-run.
+  if(sendFixes.busy) return sendFixes.busy.then(() => sendFixes());
+  sendFixes.busy = sendFixesNow().catch(() => {}).then(() => { sendFixes.busy = null; });
+  return sendFixes.busy;
+}
+async function sendFixesNow(){
+  const due = loadFixes().filter(f => !f.sentAt && f.business_id === AUTH.business);
+  if(!due.length) return;
+  await ensureSession();
+  for(const f of due){
+    // A fix points at the day. If that day is still on this phone waiting
+    // for signal, the shop has nothing to attach it to yet - it goes after.
+    if(f.market_id === S.marketId && f.day_date === S.dayOf && !S.sentAt){
+      markFix(f.id, { problem:"daynotin" }); continue;
+    }
+    let problem = null, ok = false;
+    try{
+      const res = await fetch(CLOUD.url + "/rest/v1/day_corrections", {
+        method:"POST", headers: cloudHeaders({ "Prefer":"return=minimal" }),
+        body: JSON.stringify({ id:f.id, business_id:f.business_id, market_id:f.market_id,
+                               day_date:f.day_date, message:f.message, asked_at:f.asked_at })
+      });
+      if(res.ok) ok = true;
+      else {
+        const d = await res.json().catch(() => ({}));
+        if(d.code === "23505") ok = true;                    // this very id is already there
+        else if(d.code === "23503") problem = "daynotin";    // the shop does not have that day
+        else if(res.status === 404 || d.code === "PGRST205" || d.code === "42P01") problem = "notready";
+        else problem = "failed";
+      }
+    }catch(e){ problem = "nosignal"; }
+    markFix(f.id, ok ? { sentAt:new Date().toISOString(), problem:null } : { problem });
+  }
+}
+/* =========================================================
+   Days still going to the shop
+
+   A counted day that has not reached the shop yet - no signal, a slot
+   already taken, a sign-in that stopped working - used to be deleted once it
+   was twenty hours old, while its screen said nothing is lost.
+
+   Now, when the next market day comes round first, the waiting day is set
+   aside here with everything it needs to send - the sheet and every count,
+   worked out while the day was still on the phone - and the phone moves on to
+   the day in front of it. This queue keeps trying on its own, exactly like
+   the day itself did, and tells the seller where it stands until it lands.
+   ========================================================= */
+const OUTBOX_KEY = "packout.outbox.v1";
+const SHELF_KEY  = "packout.unfinished.v1";
+
+function loadOutbox(){
+  try{ const r = JSON.parse(localStorage.getItem(OUTBOX_KEY)); return Array.isArray(r) ? r : []; }
+  catch(e){ return []; }
+}
+function saveOutbox(list){
+  try{ localStorage.setItem(OUTBOX_KEY, JSON.stringify(list)); return true; }
+  catch(e){ return false; }
+}
+function waitingDays(){
+  return loadOutbox().filter(e => !e.sentAt && e.business === AUTH.business);
+}
+
+/* Runs once, when the app opens, before anything is drawn. */
+function setAsideOldDay(){
+  const blank = () => {
+    const f = JSON.parse(JSON.stringify(BLANK));
+    f.me = S.me; f.mode = S.mode; f.tab = S.tab;
+    return f;
+  };
+
+  // A counted day from an earlier date, and a new market to work today.
+  if(S.parkMe && !S.sentAt && S.submittedAt && myMarketToday() && !AUTH.demo){
+    const list = loadOutbox();
+    list.push({
+      id: newId(),
+      business: AUTH.business,
+      payload: dayPayload(),              // S is still the waiting day here
+      counts: countRows(null),
+      market: MY_MARKET.name, day: S.dayOf,
+      problem: S.sendError || null,
+      parkedAt: new Date().toISOString(), sentAt: null
+    });
+    // Only move on once it is safely in the queue. If this phone cannot hold
+    // it, the waiting day stays on screen rather than being lost.
+    if(!saveOutbox(list)) return;
+    S = blank(); save();
+    MY_MARKET = marketOrAny(); MY_REC = recommendMarket(MY_MARKET.id);
+    return;
+  }
+
+  // Begun, never counted up, long abandoned: put aside, not deleted.
+  if(S.archiveMe && !S.submittedAt){
+    try{
+      const shelf = JSON.parse(localStorage.getItem(SHELF_KEY) || "[]");
+      const copy = JSON.parse(JSON.stringify(S));
+      copy.photo = null; (copy.expenses || []).forEach(x => x.photo = null);
+      shelf.push({ setAsideAt: new Date().toISOString(), day: copy });
+      localStorage.setItem(SHELF_KEY, JSON.stringify(shelf.slice(-5)));
+    }catch(e){ return; }                  // could not keep it: leave it where it is
+    S = blank(); save();
+    MY_MARKET = marketOrAny(); MY_REC = recommendMarket(MY_MARKET.id);
+  }
+}
+
+function sendOutbox(){
+  if(AUTH.demo || !AUTH.business) return Promise.resolve();
+  if(sendOutbox.busy) return sendOutbox.busy.then(() => sendOutbox());
+  sendOutbox.busy = sendOutboxNow().catch(() => {}).then(() => { sendOutbox.busy = null; });
+  return sendOutbox.busy;
+}
+async function sendOutboxNow(){
+  const due = waitingDays();
+  if(!due.length) return;
+  await ensureSession();
+  for(const e of due){
+    let problem = null, ok = false;
+    try{
+      if(AUTH.signinBroken){ problem = "signin"; }
+      else {
+        const res = await fetch(CLOUD.url + "/rest/v1/market_days", {
+          method:"POST", headers: cloudHeaders({ "Prefer":"return=representation" }),
+          body: JSON.stringify(e.payload)
+        });
+        let dayId = null;
+        if(res.status === 401 || res.status === 403) problem = "signin";
+        else if(res.status === 409){
+          // Already there. Ours only if it was sent under the same name.
+          const g = await fetch(CLOUD.url + "/rest/v1/market_days"
+            + "?business_id=eq." + encodeURIComponent(e.payload.business_id)
+            + "&market_id=eq."   + encodeURIComponent(e.payload.market_id)
+            + "&day_date=eq."    + encodeURIComponent(e.payload.day_date)
+            + "&select=id,seller_id", { headers: cloudHeaders() });
+          if(!g.ok) problem = "failed";
+          else {
+            const rows = await g.json();
+            if(rows.length && rows[0].seller_id === e.payload.seller_id) dayId = rows[0].id;
+            else problem = "clash";
+          }
+        }
+        else if(res.ok) dayId = (await res.json())[0].id;
+        else problem = "failed";
+
+        if(dayId){
+          const rows = (e.counts || []).map(c => Object.assign({}, c, { market_day_id: dayId }));
+          if(rows.length){
+            const rc = await fetch(CLOUD.url + "/rest/v1/day_counts?on_conflict=market_day_id,product_id", {
+              method:"POST", headers: cloudHeaders({ "Prefer":"resolution=ignore-duplicates,return=minimal" }),
+              body: JSON.stringify(rows)
+            });
+            if(rc.ok) ok = true;
+            else problem = (rc.status === 401 || rc.status === 403) ? "signin" : "failed";
+          } else ok = true;
+        }
+      }
+    }catch(x){ problem = "nosignal"; }
+    const list = loadOutbox();
+    const item = list.find(x => x.id === e.id);
+    if(item){ Object.assign(item, ok ? { sentAt:new Date().toISOString(), problem:null } : { problem }); saveOutbox(list); }
+  }
+}
+
+/* What a seller sees on their own home screen while a day is still waiting. */
+function outboxNotice(){
+  if(AUTH.demo) return "";
+  const list = waitingDays();
+  if(!list.length) return "";
+  const signin = list.some(e => e.problem === "signin");
+  return list.map(e => {
+    const when = e.day ? fmtDate(new Date(e.day + "T12:00:00")) : "An earlier day";
+    const why = e.problem === "signin"
+      ? "This phone's sign-in has stopped working, so it can't send. It's saved and nothing is lost. Ask Nawid for a new code."
+      : e.problem === "clash"
+      ? "Another day is already logged for that market and date. It's saved on this phone. Tell Nawid."
+      : "It's saved on this phone and keeps trying on its own. Nothing is lost.";
+    return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="spread"><div class="lbl">Not at the shop yet</div><span class="pill pill-warn">${esc(e.market || "Market")}</span></div>
+      <p class="note"><b>${esc(when)}</b> at ${esc(e.market || "your market")} hasn't reached the shop. ${why}</p>
+    </div>`;
+  }).join("") + (signin
+    ? `<button class="btn" data-act="resignin">I have a new code</button>`
+    : `<button class="btn btn-quiet btn-sm" data-act="outbox-retry">Try sending again</button>`);
+}
+
+function markFix(id, changes){
+  const list = loadFixes();
+  const f = list.find(x => x.id === id);
+  if(f){ Object.assign(f, changes); saveFixes(list); }
 }
 
 /* =========================================================
@@ -1880,6 +2278,7 @@ function scr_dayoff(){
       <h1 class="page" style="margin-top:6px">Nothing on today</h1>
       <p class="note" style="margin-top:5px">No market for ${esc(me()?me().name:"you")} today.</p>
     </div>
+    ${outboxNotice()}
     ${next.length ? `<div class="card">
       <div class="card-hd"><h3>Your markets</h3></div>
       ${next.map(x=>`<div class="step-row"><div class="grow"><div class="step-name">${esc(x)}</div></div></div>`).join("")}
@@ -1925,6 +2324,7 @@ function scr_today(){
       <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.hours ? esc(MY_MARKET.hours) : MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}</p>
 
     </div>
+    ${outboxNotice()}
 
     <div class="card stripe stripe-live">
       <div class="card-hd"><h3>Take ${r.total} items</h3><span class="pill pill-live"><span class="dot"></span>Ready</span></div>
@@ -2425,7 +2825,7 @@ function scr_result(){
 
   return `<div class="pad stack">
     <div>
-      <div class="lbl">${esc(fmtDate(TODAY))} \u00B7 ${esc(MY_MARKET.name)}</div>
+      <div class="lbl">${esc(fmtDate(S.dayOf ? new Date(S.dayOf + "T12:00:00") : TODAY))} \u00B7 ${esc(MY_MARKET.name)}</div>
       <h1 class="page" style="margin-top:6px">Day's done</h1>
     </div>
 
@@ -2478,16 +2878,20 @@ function scr_result(){
 
     <div class="card card-pad stack-sm stripe stripe-${S.sentAt || AUTH.demo ? "good" : "warn"}">
       <div class="spread">
-        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : S.sendError === "clash" ? "Could not go in yet" : "Waiting for signal"}</div>
-        ${S.sentAt || AUTH.demo ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
+        <div class="lbl">${AUTH.demo ? "Nothing sent \u2014 just a look" : S.sentAt ? "Sent to the shop" : S.sendError === "signin" ? "This phone needs signing in again" : S.sendError === "clash" ? "Could not go in yet" : "Waiting for signal"}</div>
+        ${S.sentAt || AUTH.demo || S.sendError === "signin" ? "" : `<button class="btn btn-quiet btn-sm" data-act="retry-send">Try again</button>`}
       </div>
       <p class="note">${AUTH.demo
         ? "This is the look-around version, so nothing left this phone. On a real phone this day would already be with Nawid."
         : S.sentAt
         ? "Nawid has this day. The counts, the money and your notes went up on their own \u2014 nobody has to retype anything."
+        : S.sendError === "signin"
+        ? "Your day is saved on this phone and nothing is lost. The phone's sign-in has stopped working, so it cannot send \u2014 more signal will not fix it. Ask Nawid for a new code, then tap the button below. Your day goes up by itself the moment you are back in, under your name."
         : S.sendError === "clash"
         ? "A different day is already logged for this market today, so yours could not go in. Nothing you did is wrong and nothing is lost \u2014 your counts are safe on this phone. Tell Nawid, and tap Try again once he says it is clear."
         : "Saved on your phone. It goes on its own as soon as you have signal, even if you close the app. Nothing is lost."}</p>
+      ${S.sendError === "signin" && !S.sentAt && !AUTH.demo
+        ? `<button class="btn" data-act="resignin" style="margin-top:4px">I have a new code</button>` : ""}
       <div class="chips" style="margin-top:4px">
         ${WENT_OUT().map(pid=>`<span class="chip">${esc(prod(pid).short)} ${soldByCount(pid)} sold \u00B7 ${S.closing[pid]||0} back</span>`).join("")}
       </div>
@@ -2502,11 +2906,31 @@ function scr_result(){
       </div>
       <div class="card-pad stack-sm">
         <p class="note">These numbers are final. Nothing in here can be quietly changed now.</p>
-        ${S.corrections.length ? `<div class="chips">${S.corrections.map(c=>`<span class="chip chip-hi">fix asked ${esc(c.at)}</span>`).join("")}</div>` : ""}
+        ${fixesForDay().map(f => {
+          /* Say exactly where each request is. "Sent to the shop" only once the
+             shop has answered that it has it - never on the tap. */
+          const at = new Date(f.asked_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+          const where = AUTH.demo ? "Nothing sent &mdash; just a look"
+            : f.sentAt ? "With the shop"
+            : f.problem === "daynotin" ? "Waiting for your day"
+            : "Not with the shop yet";
+          const why = AUTH.demo ? ""
+            : f.sentAt ? ""
+            : f.problem === "notready" ? "The shop's side can't take fixes yet. It is saved on this phone and keeps trying on its own. If it matters today, tell Nawid."
+            : f.problem === "daynotin" ? "Saved on this phone. Your day has to reach the shop first, then this follows it."
+            : "Saved on this phone. It goes on its own as soon as it can. Nothing is lost.";
+          return `<div class="card-pad stack-sm stripe stripe-${f.sentAt || AUTH.demo ? "good" : "warn"}" style="padding:12px 14px;border-radius:var(--r-sm);background:var(--glass-3)">
+            <div class="spread"><div class="lbl">You asked &middot; ${esc(at)}</div>
+              <span class="pill ${f.sentAt ? "pill-good" : "pill-warn"}">${where}</span></div>
+            <div style="font-size:14px;white-space:pre-wrap">${esc(f.message)}</div>
+            ${why ? `<p class="note" style="font-size:12.5px">${why}</p>` : ""}
+          </div>`;
+        }).join("")}
+        ${fixesForDay().some(f => !f.sentAt) && !AUTH.demo ? `<button class="btn btn-quiet btn-sm" data-act="fix-retry">Try sending again</button>` : ""}
         ${S.showFix
           ? `<div class="field" style="margin-top:6px">
                <label class="lbl" for="fixBox">What's wrong?</label>
-               <textarea id="fixBox" placeholder="Counted 15 chicken but wrote 51"></textarea>
+               <textarea id="fixBox" placeholder="Counted 15 chicken but wrote 51" maxlength="2000" data-set="fixDraft">${esc(S.fixDraft||"")}</textarea>
              </div>
              <div class="row" style="gap:8px">
                <button class="btn btn-sm" data-act="fix-send" style="flex:2">Ask the shop to fix it</button>
@@ -2542,7 +2966,7 @@ function liveDay(plan){
     return { name:"You", phone:null, sold: closed?soldTotal():null, rev: closed?revenueTotal():null,
              status, live:!closed && !!S.photo, perPack:null, fullPer:null, out:openedTotal(),
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
-             fixes: S.corrections.length,
+             fixes: fixesForDay().length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
              owed: closed ? (dayPay(S.me, moneyIn()+expTotal("till"), MY_MARKET.id).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
@@ -2644,6 +3068,34 @@ function owner_market(mid){
              <div><div class="lbl">Reports at</div><div class="mid" style="margin-top:5px">close</div></div>`}
         ${d.phone ? `<a class="btn btn-quiet btn-sm" href="sms:${esc(d.phone.replace(/[^0-9+]/g,""))}" style="margin-left:auto;text-decoration:none">Text ${esc(d.name.split(" ")[0])}</a>` : ""}
       </div>
+      ${d.row ? (() => {
+        /* What the seller first sent, next to anything they have since asked
+           to change. The day itself is never edited - the owner reads both
+           and decides. */
+        const r = d.row;
+        const line = (k, v) => `<div class="kv"><span class="kv-k">${k}</span><span class="kv-v">${v}</span></div>`;
+        return `<div class="card-pad" style="padding-top:0">
+          <div class="lbl" style="margin-bottom:4px">What was sent</div>
+          ${line("Cash", money2(Number(r.cash)||0))}
+          ${line("Square", money2(Number(r.card)||0))}
+          ${(r.other_pays||[]).map(o => line(esc(o.how||"Other"), money2(Number(o.amount)||0))).join("")}
+          ${Number(r.spent_from_till) ? line("Spent out of the till", money2(Number(r.spent_from_till))) : ""}
+          ${line("Chips sold", Number(r.chips_sold)||0)}
+          ${Number(r.fronted) ? line("Paid out of their own pocket", money2(Number(r.fronted))) : ""}
+          ${Number(r.discounts) ? line("Free ones, deals and trades (their guess)", money2(Number(r.discounts))) : ""}
+          ${r.note ? `<p class="note" style="margin-top:8px">&ldquo;${esc(r.note)}&rdquo;</p>` : ""}
+        </div>
+        ${d.fixList && d.fixList.length ? `<div class="card-pad stack-sm" style="padding-top:0">
+          <div class="lbl" style="color:var(--bad)">${d.fixList.length === 1 ? "A fix asked for" : d.fixList.length + " fixes asked for"}</div>
+          ${d.fixList.map(f => `<div class="hint" style="color:var(--ink)">
+            <div>${esc(f.message)}</div>
+            <div class="sub" style="margin-top:6px">${esc(f.seller_name || "A seller")} &middot; asked ${esc(new Date(f.asked_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}))}</div>
+          </div>`).join("")}
+          <p class="note" style="font-size:12.5px">The numbers above are what was first sent. Nothing has been changed.</p>
+        </div>` : !REAL_FIXES_OK ? `<div class="card-pad" style="padding-top:0">
+          <p class="note" style="font-size:12.5px">Could not check whether ${esc(d.name)} asked for anything to be fixed.</p>
+        </div>` : ""}`;
+      })() : ""}
     </div>` : ""}
 
     <div class="tiles">
@@ -2724,7 +3176,7 @@ function owner_today(){
       </div>
       ${(d.overSend || d.fixes || d.packedByOther) ? `<div class="card-pad" style="padding-top:0"><div class="chips">
         ${d.overSend ? `<span class="chip chip-hi">took ${d.overSend>0?"+":"\u2212"}${Math.abs(d.overSend)} vs send list</span>` : ""}
-        ${d.fixes ? `<span class="chip chip-hi">${d.fixes} correction asked</span>` : ""}
+        ${d.fixes ? `<span class="chip chip-hi" style="color:var(--bad)">${d.fixes} fix${d.fixes===1?"":"es"} asked &mdash; tap to read</span>` : ""}
         ${d.packedByOther ? `<span class="chip chip-hi">cooler packed by ${esc(d.packedByOther)}</span>` : ""}
       </div></div>` : ""}
     </div>`;
@@ -3059,6 +3511,10 @@ function render(){
         PRETEND_DAY ? ` &middot; pretending it is <b>${esc(DAY_FULL[PRETEND_DAY])}</b>` : ""}</span>
       <button data-act="test-reset">Wipe and start again</button>
     </div>`;
+  // Nobody lands on the owner screens without being an owner, however the
+  // phone got there - an old saved state, or a tap from before this rule.
+  if(S.mode==="owner" && !canSeeOwner()){ S.mode="seller"; S.marketOpen=null; }
+  document.querySelector(".modesw").hidden = !canSeeOwner();
   $("m-seller").setAttribute("aria-pressed", S.mode==="seller");
   $("m-owner").setAttribute("aria-pressed", S.mode==="owner");
   $("brandsub").textContent = S.mode==="seller" ? "Seller" : "Owner";
@@ -3076,7 +3532,7 @@ function render(){
     const enrolled = AUTH.person || AUTH.demo;
     const [body, ft] = !enrolled          ? [scr_whoami, null]
                      : !S.me              ? [scr_pickdemo, null]
-                     : !myMarketToday()   ? [scr_dayoff, null]
+                     : (!myMarketToday() && !dayInHand()) ? [scr_dayoff, null]
                      : (SELLER_SCREENS[S.screen] || SELLER_SCREENS.today);
     app.innerHTML = body();
     foot.innerHTML = ft ? `<div class="sticky-foot"><div class="sticky-foot-in">${ft()}</div></div>` : "";
@@ -3092,7 +3548,7 @@ document.addEventListener("click", e => {
   if(e.target.closest("a")) return;          // let phone and text links through
 
   const opener = e.target.closest("[data-market]");
-  if(opener && !e.target.closest("button")){
+  if(opener && !e.target.closest("button") && canSeeOwner()){
     S.marketOpen = opener.dataset.market; render(); window.scrollTo(0,0); return;
   }
 
@@ -3109,13 +3565,14 @@ document.addEventListener("click", e => {
 
   if(t.id==="m-seller"){ S.mode="seller"; S.marketOpen=null; render(); return; }
   if(t.id==="m-owner"){
+    if(!canSeeOwner()) return;
     S.mode="owner"; render();
     loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
     return;
   }
 
   const tab = t.dataset.tab;
-  if(tab){
+  if(tab && canSeeOwner()){
     S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
     if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
     return;
@@ -3123,13 +3580,18 @@ document.addEventListener("click", e => {
 
   const go = t.dataset.go;
   if(go){
-    if(go==="loadout"){ P_IDS.forEach(p=>{ if(S.opening[p]==null) S.opening[p]=MY_REC.byProduct[p].qty; }); }
+    if(go==="loadout"){
+      beginDay();
+      P_IDS.forEach(p=>{ if(S.opening[p]==null) S.opening[p]=MY_REC.byProduct[p].qty; });
+    }
     if(go==="market" && !S.packedAt){
       S.packedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
     }
     if(go==="result"){
+      beginDay();                          // a day reached some other way still gets its stamp
       S.status="closed"; S.endedAt=Date.now();
       if(!S.submittedAt) S.submittedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
+      if(!S.submittedBy) S.submittedBy = S.me;
       // Fire and forget: a market with no signal must not block the screen.
       sendDay().then(() => render());
     }
@@ -3170,13 +3632,26 @@ document.addEventListener("click", e => {
       if(res.ok){
         S.me = AUTH.person; S.codeError = null; S.codeTyped = "";
         MY_MARKET = marketOrAny(); MY_REC = recommendMarket(MY_MARKET.id);
-        S.screen = "today";
+        // A counted day still waiting to go up stays where it is, and goes now.
+        const waiting = S.status === "closed" && S.submittedAt && !S.sentAt;
+        if(!waiting) S.screen = "today";
         save();
+        if(waiting) sendDay().then(() => render());
+        if(waitingDays().length) sendOutbox().then(() => render());
         /* Whether this phone is the sandbox is settled on the app's first
            line, before any of this ran. Signing into it has to start the app
            over, or the stripe would be missing and a test day would look
            exactly like a real one. */
-        if(/test/i.test(AUTH.businessName || "")){ location.reload(); return; }
+        /* Start over whenever this sign-in moves the phone into or out of the
+           sandbox. The stripe and the pretend-day switch are settled on the
+           app's first line: signing into the sandbox without a restart would
+           make a test day look real, and signing into the real business
+           while still in test mode would let a real day take a pretend date. */
+        const nowTest = /test/i.test(AUTH.businessName || "");
+        if(nowTest !== TEST_MODE){
+          location.replace(nowTest ? location.pathname + location.search : location.pathname);
+          return;
+        }
       } else {
         S.codeError = res.msg;
       }
@@ -3195,6 +3670,23 @@ document.addEventListener("click", e => {
     S.screen = "today";
     render(); window.scrollTo(0,0); return;
   }
+  if(t.dataset.act==="outbox-retry"){
+    toast("Trying\u2026");
+    sendOutbox().then(() => { toast(waitingDays().length ? "Still not at the shop yet" : "It's at the shop now"); render(); });
+    return;
+  }
+
+  if(t.dataset.act==="resignin"){
+    /* Back to the code screen with the day still on the phone. The dead
+       sign-in is dropped completely, so the new code starts a fresh one
+       instead of trying to renew what is already gone. */
+    AUTH.person=null; AUTH.name=null; AUTH.business=null; AUTH.role=null;
+    AUTH.businessName=null; AUTH.token=null; AUTH.refresh=null; AUTH.expires=null;
+    AUTH.signinBroken=false; saveAuth();
+    S.sendError = null; S.codeError = null; S.codeTyped = ""; save();
+    render(); window.scrollTo(0,0); return;
+  }
+
   if(t.dataset.act==="switch-me"){
     /* This signs the phone out, and codes are single use - so the way back in
        is a new code from Nawid, which on a market morning he may not be awake
@@ -3212,7 +3704,14 @@ document.addEventListener("click", e => {
       if(!ok) return;
     }
     S.me = null;
-    if(!AUTH.demo){ AUTH.person=null; AUTH.name=null; AUTH.business=null; AUTH.role=null; saveAuth(); }
+    if(!AUTH.demo){ AUTH.person=null; AUTH.name=null; AUTH.business=null; AUTH.role=null; AUTH.businessName=null; saveAuth(); }
+    /* Leaving the sandbox has to start the app over. Whether this phone is
+       the sandbox is decided on the app's first line, so without a fresh
+       start the orange stripe - and the pretend-day switch with it - stayed
+       on after signing out. Sign straight into the real business from there
+       and a real day could be filed under a pretend date. Dropping ?day= from
+       the address goes with it. */
+    if(TEST_MODE){ save(); location.replace(location.pathname); return; }
     render(); window.scrollTo(0,0); return;
   }
 
@@ -3279,10 +3778,35 @@ document.addEventListener("click", e => {
   if(act==="retake"){ S.photo=null; S.arrivedAt=null; render(); return; }
   if(act==="fix-send"){
     const box = $("fixBox");
-    const v = box ? box.value.trim() : "";
+    const v = (box ? box.value : (S.fixDraft || "")).trim();
     if(!v){ toast("Say what's wrong first"); return; }
-    S.corrections.push({ text:v, at:new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}) });
-    S.showFix = false; buzz(20); toast("Sent to the shop"); render(); return;
+    if(!S.marketId || !S.dayOf){ toast("This day has no market to attach a fix to — tell Nawid"); return; }
+    /* Queued first, sent second. If the phone dies between the two, the
+       request is still on it and goes next time the app opens. */
+    const id = newId();
+    const list = loadFixes();
+    list.push({ id, business_id: AUTH.demo ? null : AUTH.business,
+                market_id:S.marketId, day_date:S.dayOf, message:v,
+                asked_at:new Date().toISOString(), sentAt:null, problem:null });
+    if(!saveFixes(list)){ toast("Couldn't save that on this phone — tell Nawid directly"); return; }
+    S.fixDraft = ""; S.showFix = false; buzz(20);
+    if(AUTH.demo){ toast("Saved — nothing leaves a look-around phone"); render(); return; }
+    toast("Sending…"); render();
+    sendFixes().then(() => {
+      const f = loadFixes().find(x => x.id === id);
+      toast(f && f.sentAt ? "The shop has it" : "Saved \u2014 not with the shop yet");
+      render();
+    });
+    return;
+  }
+  if(act==="fix-retry"){
+    toast("Trying…");
+    sendFixes().then(() => {
+      const left = fixesForDay().filter(f => !f.sentAt).length;
+      toast(left ? "Still not with the shop yet" : "The shop has it");
+      render();
+    });
+    return;
   }
   if(act==="reset"){ reset(); window.scrollTo(0,0); return; }
 });
@@ -3381,6 +3905,7 @@ document.addEventListener("change", e => {
 
 ensureSession();
 
+setAsideOldDay();
 render();
 
 /* A day the phone thinks it sent, but the shop never received. */
@@ -3389,13 +3914,19 @@ verifySent();
 /* A day that never made it off the phone goes again on its own - on
    load, and the moment the phone says it is back online. The seller
    should never have to remember to resend anything. */
-if(S.mode === "owner") loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
+if(S.mode === "owner" && canSeeOwner()) loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
 
 function resendIfPending(){
   if(S.status === "closed" && S.submittedAt && !S.sentAt) sendDay().then(() => render());
+  // Fixes asked for and not yet with the shop go the same way.
+  if(loadFixes().some(f => !f.sentAt)) sendFixes().then(() => render());
+  // Earlier days set aside when the next market came round.
+  if(waitingDays().length) sendOutbox().then(() => render());
 }
 resendIfPending();
 window.addEventListener("online", resendIfPending);
+// Coming back to the app after it sat in the background counts as opening it.
+document.addEventListener("visibilitychange", () => { if(!document.hidden) resendIfPending(); });
 })();
 </script>
 
