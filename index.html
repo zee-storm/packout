@@ -2578,7 +2578,9 @@ function outboxNotice(){
     </div>`;
   }).join("") + (signin
     ? `<button class="btn" data-act="resignin">Type a new code</button>`
-    : `<button class="btn btn-quiet btn-sm" data-act="outbox-retry">Try sending again</button>`);
+    // A day the shop's system turned away can only be turned away again: no button for those alone.
+    : list.some(e => e.problem !== "refused" && e.problem !== "countsrefused")
+    ? `<button class="btn btn-quiet btn-sm" data-act="outbox-retry">Try sending again</button>` : "");
 }
 
 /* =========================================================
