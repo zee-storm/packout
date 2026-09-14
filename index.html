@@ -1551,7 +1551,14 @@ function newerSigninOnPhone(){
   return false;
 }
 
+/* Why the last try at a sign-in got nowhere. The database only lets so many new
+   phones join from one internet connection an hour; past that it answers 429,
+   and the phone said "No signal" - to a seller standing on the shop's good Wi-Fi
+   while the whole crew signed in at once, who then kept retrying. */
+let SESSION_LIMITED = false;
+
 async function renewSession(){
+  SESSION_LIMITED = false;
   if(newerSigninOnPhone() && AUTH.token && AUTH.expires && Date.now() < AUTH.expires - 60000) return AUTH.token;
   const enrolled = !!(AUTH.person && AUTH.business);
 
@@ -1589,6 +1596,7 @@ async function renewSession(){
       headers:{ "apikey": CLOUD.key, "Content-Type":"application/json" },
       body: "{}"
     });
+    if(r.status === 429) SESSION_LIMITED = true;
     if(!r.ok) return null;
     const d = await r.json();
     AUTH.token = d.access_token; AUTH.refresh = d.refresh_token;
@@ -1665,7 +1673,9 @@ function codeCandidates(typed){
 // Turning a code into a person. The database checks it; the app only asks.
 async function redeemCode(code){
   const tok = await ensureSession();
-  if(!tok) return { ok:false, msg:"No signal. Try again in a moment." };
+  if(!tok) return { ok:false, msg: SESSION_LIMITED
+    ? "Too many new phones have joined from this Wi-Fi in the last hour. Turn Wi-Fi off and use mobile data, or try again in a few minutes."
+    : "No signal. Try again in a moment." };
   try{
     const r = await fetch(CLOUD.url + "/rest/v1/rpc/redeem_code", {
       method:"POST", headers: cloudHeaders(), body: JSON.stringify({ p_code: code })
@@ -4818,8 +4828,12 @@ document.addEventListener("change", e => {
 
 /* Redraw once the sign-in has been checked. The screen is drawn before the
    answer comes back, so a sign-in found dead on opening only showed "Your code
-   has stopped working" the next time the app was opened. */
-ensureSession().then(() => { if(AUTH.signinBroken) render(); });
+   has stopped working" the next time the app was opened.
+   A phone with no sign-in at all isn't given one here: it used to join as a new
+   anonymous user the moment the page opened - somebody only having a look
+   included - and the database lets only so many join from one connection an
+   hour. It joins when a code is typed. */
+if(AUTH.token || AUTH.refresh) ensureSession().then(() => { if(AUTH.signinBroken) render(); });
 
 setAsideOldDay();
 render();
