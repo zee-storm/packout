@@ -2127,7 +2127,7 @@ async function loadRealUnfinished(){
     const since = localDay(daysAgo(14));
     const u = await fetch(CLOUD.url + "/rest/v1/unfinished_days"
       + "?business_id=eq." + encodeURIComponent(CLOUD.business)
-      + "&day_date=gte." + since
+      + "&day_date=gte." + since + "&day_date=lte." + todayStamp()
       + "&select=id,market_id,market_name,day_date,seller_id,seller_name,went_out,items_out,packed_at,reached,set_aside_at,reporter_name"
       + "&order=day_date.desc", { headers: cloudHeaders() });
     if(!u.ok) throw new Error(String(u.status));
@@ -2137,7 +2137,14 @@ async function loadRealUnfinished(){
       + "?business_id=eq." + encodeURIComponent(CLOUD.business)
       + "&day_date=gte." + since + "&select=market_id,day_date,seller_id", { headers: cloudHeaders() });
     if(!s.ok) throw new Error(String(s.status));
-    const sent = await s.json();
+    /* A day set aside and later counted up can land as a second sheet - the
+       market already had one - and then it isn't unfinished any more either. It
+       used to stay on this list after Nawid had the sheet (found in the launch
+       rehearsal). */
+    const ss = await fetch(CLOUD.url + "/rest/v1/second_sheets"
+      + "?business_id=eq." + encodeURIComponent(CLOUD.business)
+      + "&day_date=gte." + since + "&select=market_id,day_date,seller_id", { headers: cloudHeaders() });
+    const sent = (await s.json()).concat(ss.ok ? await ss.json() : []);
     // Every unfinished day is its own day - two set aside for the same market
     // and date are two coolers that went out. A day taken back up and left
     // again keeps its id, so it is never listed twice.
