@@ -2219,6 +2219,31 @@ function dayFromCloud(row, m){
    true  - yes, this phone's own day is in
    false - somebody else's day is in that slot
    null  - could not find out (no signal, no answer) */
+/* The shop already has a sheet under this seller's name for this market and day.
+   It is this very sheet - sent before, its answer lost - only if it says the
+   same. The same person's day counted on a second phone (a phone handed over at
+   a shared stall, or a borrowed phone while theirs was dead) used to be called
+   "already in" and marked Sent, and its different cash, counts and notes were
+   thrown away while the phone said Nawid had them. Different now means a second
+   sheet, which Nawid sees next to the first. Money to the cent, give or take
+   rounding; every count line once the shop has them. */
+const SHEET_COLUMNS = "id,seller_id,cash,card,other_pays,chips_sold,spent_from_till,fronted,discounts,driving_pay,car_gas,note,day_counts(product_id,went_out,came_back,samples,damaged)";
+function sameSheet(row, payload, counts){
+  const near = (a, b) => Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.015;
+  const others = list => (list || []).reduce((t, o) => t + (Number(o.amount) || 0), 0);
+  for(const f of ["cash", "card", "chips_sold", "spent_from_till", "fronted", "discounts", "driving_pay", "car_gas"]){
+    if(f in payload && f in row && !near(row[f], payload[f])) return false;
+  }
+  if(!near(others(row.other_pays), others(payload.other_pays))) return false;
+  if(String(row.note || "").trim() !== String(payload.note || "").trim()) return false;
+  const have = row.day_counts || [];
+  if(have.length){   // none yet means the counts were what got lost; they are filled in
+    const line = c => [c.product_id, Number(c.went_out) || 0, Number(c.came_back) || 0, Number(c.samples) || 0, Number(c.damaged) || 0].join(":");
+    if(have.map(line).sort().join("|") !== (counts || []).map(line).sort().join("|")) return false;
+  }
+  return true;
+}
+
 async function dayAlreadyThere(){
   try{
     await ensureSession();
@@ -2228,19 +2253,20 @@ async function dayAlreadyThere(){
       + "?business_id=eq." + encodeURIComponent(CLOUD.business)
       + "&market_id=eq."   + encodeURIComponent(m.id)
       + "&day_date=eq."    + encodeURIComponent(S.dayOf || todayStamp())
-      + "&select=id,seller_id",
+      + "&select=" + SHEET_COLUMNS,
       { headers: cloudHeaders() });
     if(!r.ok) return null;
     const rows = await r.json();
     if(!rows.length) return false;
     const row = rows[0];
-    /* Ours means counted by the person this day belongs to. It used to also
-       require the cash and card to match exactly, so a seller who corrected a
-       figure after a failed send had their own day called somebody else's. */
+    /* Ours means counted by the person this day belongs to AND saying the same
+       (sameSheet). A sheet that has landed can't be edited from the phone -
+       "Check the numbers" only follows a refusal, which never lands - so a
+       difference is a second count, not a corrected one. */
     dayAlreadyThere.id = row.id;
     // A day taken back off the shelf is ours only if it is this very sheet.
     if(S.dayRowId) return row.id === S.dayRowId;
-    return row.seller_id === (S.submittedBy || S.me);
+    return row.seller_id === (S.submittedBy || S.me) && sameSheet(row, dayPayload(), countRows(null));
   }catch(e){ return null; }
 }
 
@@ -2697,12 +2723,12 @@ async function sendOutboxNow(){
             + "?business_id=eq." + encodeURIComponent(e.payload.business_id)
             + "&market_id=eq."   + encodeURIComponent(e.payload.market_id)
             + "&day_date=eq."    + encodeURIComponent(e.payload.day_date)
-            + "&select=id,seller_id", { headers: cloudHeaders() });
+            + "&select=" + SHEET_COLUMNS, { headers: cloudHeaders() });
           if(!g.ok) problem = "failed";
           else {
             const rows = await g.json();
             const ours = rows.length && (e.payload.id ? rows[0].id === e.payload.id
-                                                      : rows[0].seller_id === e.payload.seller_id);
+                                                      : rows[0].seller_id === e.payload.seller_id && sameSheet(rows[0], e.payload, e.counts));
             if(ours) dayId = rows[0].id;
             else {
               problem = "clash";
