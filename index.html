@@ -1262,6 +1262,15 @@ function me(){ return S.me ? slr(S.me) : null; }
 function canSeeOwner(){ return !!AUTH.demo || AUTH.role === "owner"; }
 function myMarketToday(){
   const today = MARKETS.filter(m => m.day === DAYS[TODAY.getDay()]);
+  /* Covering. Sellers work markets they aren't down for - someone off sick, a
+     slot with nobody named (all four Thursday markets had nobody, and a seller
+     working one opened the app to "Nothing on today" and couldn't report it).
+     The choice holds for today only; tomorrow is back to their own markets. */
+  const cover = S.coverMarket;
+  if(S.me && cover && cover.forDay === todayStamp()){
+    const m = today.find(x => x.id === cover.id);
+    if(m) return m;
+  }
   if(S.me){
     const mine = today.filter(m => m.crew.includes(S.me));
     return mine[0] || null;          // null means nothing on for them today
@@ -1412,7 +1421,9 @@ const BLANK = {
   dayRowId:null,                 // a day taken back off the shelf: the id its sheet goes in under
   dayOwner:null,                 // whose day this is, from the moment it began
   codeTyped:"", codeError:null,
-  codeAnyway:false               // on an iPhone browser, chose to type the code there rather than install first
+  codeAnyway:false,              // on an iPhone browser, chose to type the code there rather than install first
+  coverMarket:null,              // {id, forDay}: working a market they aren't down for, today only
+  showCover:false
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
 SEEN_REV = storedRev();
@@ -1510,6 +1521,12 @@ function load(){
     const startOver = () => {
       const f = JSON.parse(JSON.stringify(BLANK));
       f.me = merged.me; f.mode = merged.mode; f.tab = merged.tab;
+      /* A market chosen to cover today stays chosen when the app is closed and
+         opened again before packing - picked at home, opened at the stall. It
+         used to be thrown away, and a seller with their own market that day got
+         it back without noticing. It still goes at midnight. */
+      const c = merged.coverMarket;
+      if(c && c.forDay === today && merged.me) f.coverMarket = c;
       return f;
     };
     // Work has begun once they have tapped Pack the cooler.
@@ -1605,6 +1622,7 @@ function takePhone(newMe){
     f.mode = S.mode; f.tab = S.tab;
     S = f;
   }
+  if(S.me !== newMe){ S.coverMarket = null; S.showCover = false; }   // a market someone else chose to cover isn't theirs
   S.me = newMe;
   return true;
 }
@@ -3088,6 +3106,30 @@ function scr_whoami(){
   </div>`;
 }
 
+/* "Working a different market today?" - today's markets by name only. Who is
+   down for each is not shown: a seller never sees other sellers' names. Only
+   before anything is packed; a day already begun keeps its market. */
+function coverPicker(){
+  if(!S.me || (S.startedAt && !onlyLooked(S))) return "";
+  const today = MARKETS.filter(m => m.day === DAYS[TODAY.getDay()]);
+  const own = MARKETS.filter(m => m.day === DAYS[TODAY.getDay()] && m.crew.includes(S.me));
+  const covering = S.coverMarket && S.coverMarket.forDay === todayStamp() ? mkt(S.coverMarket.id) : null;
+  const label = own.length || covering ? "Working a different market today?" : "Working a market today?";
+  if(!S.showCover) return `<button class="btn btn-quiet btn-sm" data-act="toggle" data-flag="showCover">${label}</button>`;
+  return `<div class="card card-pad stack-sm">
+      <div class="spread"><div class="lbl">Which market are you at today?</div>
+        <button class="btn btn-quiet btn-sm" data-act="toggle" data-flag="showCover">Close</button></div>
+      <div class="stack-sm">
+        ${today.map(m => `<button class="step-row" data-cover="${esc(m.id)}" aria-pressed="${(covering ? covering.id : (own[0] || {}).id) === m.id}" style="width:100%;background:none;border:0;border-bottom:1px solid var(--glass-line-2);cursor:pointer;text-align:left">
+          <div class="grow"><div class="step-name">${esc(m.name)}</div></div>
+          <div class="mid" style="font-size:18px;color:var(--muted)">&rsaquo;</div>
+        </button>`).join("")}
+      </div>
+      ${covering && own.length && !covering.crew.includes(S.me) ? `<button class="btn btn-quiet btn-sm" data-cover="">I'm at my own market</button>` : ""}
+      <div class="hint">Pay is worked out the usual way for you at that market. Pick it before you pack the cooler.</div>
+    </div>`;
+}
+
 function scr_dayoff(){
   const next = MARKETS.filter(m => m.crew.includes(S.me))
     .map(m => DAY_FULL[m.day] + " at " + m.name);
@@ -3109,6 +3151,7 @@ function scr_dayoff(){
       <div class="card-hd"><h3>Your markets</h3></div>
       ${next.map(x=>`<div class="step-row"><div class="grow"><div class="step-name">${esc(x)}</div></div></div>`).join("")}
     </div>` : `<div class="hint">Nobody has you down for a market yet. Check with Nawid.</div>`}
+    ${coverPicker()}
     <button class="btn btn-quiet" data-act="switch-me">Not ${esc(me()?me().name:"you")}?</button>
   </div>`;
 }
@@ -3148,8 +3191,8 @@ function scr_today(){
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
       ${me() ? `<button class="btn btn-quiet btn-sm" data-act="switch-me" style="margin-top:8px">${esc(me().name)} &middot; not you?</button>` : ""}
-      <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.hours ? esc(MY_MARKET.hours) : MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}</p>
-
+      <p class="note" style="margin-top:5px">${esc(DAY_FULL[MY_MARKET.day])} &middot; ${MY_MARKET.hours ? esc(MY_MARKET.hours) : MY_MARKET.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`}${S.coverMarket && S.coverMarket.forDay === todayStamp() && S.coverMarket.id === MY_MARKET.id && !MY_MARKET.crew.includes(S.me) ? ` &middot; <b>covering today</b>` : ""}</p>
+      <div style="margin-top:8px">${coverPicker()}</div>
     </div>
     ${signinNotice()}${outboxNotice()}
 
@@ -4534,7 +4577,7 @@ function syncFootSpace(){
    is only replaced when it has actually become a different thing. A button
    that is still the same button stays under the thumb and gets the tap. A box
    that is being typed in is never touched. */
-const MORPH_KEYS = ["id","data-p","data-set","data-act","data-go","data-tab","data-market","data-me","data-exp","data-pay","data-expsrc","data-v","type"];
+const MORPH_KEYS = ["id","data-p","data-set","data-act","data-go","data-tab","data-market","data-me","data-cover","data-exp","data-pay","data-expsrc","data-v","type"];
 function sameThing(a, b){
   if(a.nodeType !== b.nodeType || a.nodeName !== b.nodeName) return false;
   return a.nodeType !== 1 || MORPH_KEYS.every(k => a.getAttribute(k) === b.getAttribute(k));
@@ -4898,6 +4941,20 @@ document.addEventListener("click", e => {
 
   const act = t.dataset.act;
   if(act==="toggle"){ const f=t.dataset.flag; S[f]=!S[f]; render(); return; }
+  if(t.dataset.cover !== undefined){
+    if(S.startedAt && !onlyLooked(S)){ toast("Send the day you're on first"); return; }
+    const id = t.dataset.cover;
+    const own = MARKETS.find(m => m.day === DAYS[TODAY.getDay()] && m.crew.includes(S.me));
+    S.coverMarket = id && (!own || own.id !== id) ? { id, forDay: todayStamp() } : null;
+    /* Only looked at the packing list so far: that look was for the other
+       market, so it goes - including its counts - and the new market fills in. */
+    if(onlyLooked(S) && S.startedAt){
+      S.startedAt = null; S.dayOf = null; S.marketId = null; S.dayOwner = null; S.opening = {};
+    }
+    S.showCover = false; S.screen = "today";
+    MY_MARKET = pickMyMarket(); MY_REC = recommendMarket(MY_MARKET.id);
+    save(); render(); window.scrollTo(0,0); return;
+  }
   const pk = t.dataset.packer;
   if(pk){ S.packedBy = pk; S.showPacker = false; render(); return; }
   if(act==="jump"){

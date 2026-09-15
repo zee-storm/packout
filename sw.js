@@ -7,7 +7,7 @@
    Bump CACHE whenever the app file changes, or phones will keep serving the
    old one. */
 
-const CACHE = "packout-ac9b6252";
+const CACHE = "packout-ef3d3bd0";
 
 // The typefaces, so the app still looks like itself with no signal. Public
 // files with nobody's data in them - the one kind of outside request worth
