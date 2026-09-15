@@ -1875,7 +1875,8 @@ async function refreshCatalogue(){
   return true;
 }
 function catalogueNotice(){
-  if(CATALOGUE.source !== "missing" || AUTH.demo || !AUTH.person) return "";
+  // A dead code is the reason nothing loads, and the code card says what to do - not "signal".
+  if(CATALOGUE.source !== "missing" || AUTH.demo || !AUTH.person || AUTH.signinBroken) return "";
   return `<div class="card card-pad stack-sm stripe stripe-warn">
       <div class="lbl">Your markets haven't loaded yet</div>
       <p class="note">PackOut needs signal once to get your markets and pay from the shop. It isn't that you have nothing on - move somewhere with signal and it loads by itself.</p>
@@ -2744,7 +2745,7 @@ function signinNotice(){
   if(waitingDays().some(e => e.problem === "signin")) return "";   // the waiting-day card already says it
   return `<div class="card card-pad stack-sm stripe stripe-warn">
       <div class="lbl">Your code has stopped working</div>
-      <p class="note">The shop has stopped accepting this phone &mdash; it was taken off the shop's list, or its sign-in ran out. <b>It isn't your signal.</b> Nothing can reach the shop until you type in a new code, so get one from Nawid before you start. You can still count your day; it goes up as soon as the new code is in.</p>
+      <p class="note">The shop has stopped accepting this phone &mdash; it was taken off the shop's list, or its sign-in ran out. <b>It isn't your signal.</b> Nothing can reach the shop until you type in a new code, so get one from Nawid before you start. ${CATALOGUE.source === "missing" ? "Your markets load as soon as the new code is in." : "You can still count your day; it goes up as soon as the new code is in."}</p>
       <button class="btn" data-act="resignin">Type a new code</button>
     </div>`;
 }
@@ -4838,7 +4839,7 @@ document.addEventListener("click", e => {
   }
   if(t.dataset.act==="catalogue-retry"){
     toast("Trying\u2026");
-    refreshCatalogue().then(ok => { if(!ok) toast("Still no answer from the shop"); render(); });
+    refreshCatalogue().then(ok => { if(!ok) toast(AUTH.signinBroken ? "Your code has stopped working \u2014 type a new code" : "Still no answer from the shop"); render(); });
     return;
   }
   if(t.dataset.act==="leave-demo"){
