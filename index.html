@@ -1423,6 +1423,7 @@ const BLANK = {
   codeTyped:"", codeError:null,
   codeAnyway:false,              // on an iPhone browser, chose to type the code there rather than install first
   coverMarket:null,              // {id, forDay}: working a market they aren't down for, today only
+  dayOwnerName:null, submittedByName:null,   // the names, kept with the day - see beginDay
   showCover:false
 };
 let S = load() || JSON.parse(JSON.stringify(BLANK));
@@ -1582,6 +1583,10 @@ function beginDay(){
   S.dayOf = todayStamp();
   S.marketId = m.id;
   S.dayOwner = S.me;
+  /* The name goes with the day. A seller's phone holds only its own person, and
+     after a hand-over the phone forgets them - so a day set aside or queued then
+     reached Nawid as "The seller". */
+  S.dayOwnerName = (me() || {}).name || (AUTH.person === S.me ? AUTH.name : null) || null;
 }
 
 /* The market to draw with: a day under way keeps its own market; otherwise
@@ -1934,6 +1939,14 @@ async function redeemCode(code){
    They are the same on a market day and different on every other day. */
 const dayMarket = () => (S.marketId && mkt(S.marketId)) || null;
 
+function sellerNameForDay(){
+  const id = S.submittedBy || S.me;
+  return (slr(id) || {}).name
+      || (id && id === S.submittedBy ? S.submittedByName : null)
+      || (id && id === S.dayOwner ? S.dayOwnerName : null)
+      || (id && id === AUTH.person ? AUTH.name : null)
+      || null;
+}
 function dayPayload(){
   const m = dayMarket() || MY_MARKET, who = me();
   return {
@@ -1943,8 +1956,9 @@ function dayPayload(){
     market_name: m.name,
     day_date: S.dayOf || todayStamp(),
     seller_id: S.submittedBy || S.me || null,
-    seller_name: (slr(S.submittedBy || S.me) || who || {}).name || null,
-    packed_by: packedByName(),
+    seller_name: sellerNameForDay(),
+    // Whose count the cooler is: the seller's own name, not "You".
+    packed_by: (!S.packedBy || S.packedBy === "you") ? sellerNameForDay() : packedByName(),
     cash: Number(S.cashCounted) || 0,
     card: Number(S.cardTotal) || 0,
     other_pays: (S.otherPays || []).filter(o => Number(o.amount)),
@@ -2081,9 +2095,9 @@ async function loadRealEarlier(today){
     const range = "&day_date=gte." + localDay(daysAgo(14)) + "&day_date=lt." + today;
     const [f, s] = await Promise.all([
       fetch(CLOUD.url + "/rest/v1/day_corrections" + biz + range
-        + "&select=id,market_id,day_date,seller_name,message,asked_at&order=day_date.desc,asked_at.asc", { headers: cloudHeaders() }),
+        + "&select=id,market_id,day_date,seller_id,seller_name,message,asked_at&order=day_date.desc,asked_at.asc", { headers: cloudHeaders() }),
       fetch(CLOUD.url + "/rest/v1/second_sheets" + biz + range
-        + "&select=id,market_id,day_date,seller_name,sender_name,sheet,counts,refused_at&order=day_date.desc,refused_at.asc", { headers: cloudHeaders() })
+        + "&select=id,market_id,day_date,seller_id,seller_name,sender_name,sheet,counts,refused_at&order=day_date.desc,refused_at.asc", { headers: cloudHeaders() })
     ]);
     if(!f.ok || !s.ok) throw new Error(f.status + "/" + s.status);
     const fixes = await f.json(), seconds = await s.json();
@@ -2093,7 +2107,7 @@ async function loadRealEarlier(today){
     if(slots.length){
       const or = slots.map(k => { const [m, d] = k.split("|"); return "and(market_id.eq." + m + ",day_date.eq." + d + ")"; }).join(",");
       const r = await fetch(CLOUD.url + "/rest/v1/market_days" + biz + "&or=(" + encodeURIComponent(or) + ")"
-        + "&select=market_id,day_date,seller_name,cash,card,chips_sold,day_counts(went_out,came_back,samples,damaged)", { headers: cloudHeaders() });
+        + "&select=market_id,day_date,seller_id,seller_name,cash,card,chips_sold,day_counts(went_out,came_back,samples,damaged)", { headers: cloudHeaders() });
       if(!r.ok) throw new Error(String(r.status));
       (await r.json()).forEach(row => { days[row.market_id + "|" + row.day_date] = row; });
     }
@@ -2144,7 +2158,7 @@ async function loadRealSecondSheets(day){
     const res = await fetch(CLOUD.url + "/rest/v1/second_sheets"
       + "?business_id=eq." + encodeURIComponent(CLOUD.business)
       + "&day_date=eq." + encodeURIComponent(day)
-      + "&select=id,market_id,seller_name,sender_name,sheet,counts,refused_at&order=refused_at.asc",
+      + "&select=id,market_id,seller_id,seller_name,sender_name,sheet,counts,refused_at&order=refused_at.asc",
       { headers: cloudHeaders() });
     if(!res.ok) throw new Error(String(res.status));
     const rows = await res.json();
@@ -2162,7 +2176,7 @@ async function loadRealFixes(day){
     const res = await fetch(CLOUD.url + "/rest/v1/day_corrections"
       + "?business_id=eq." + encodeURIComponent(CLOUD.business)
       + "&day_date=eq." + encodeURIComponent(day)
-      + "&select=id,market_id,seller_name,message,asked_at,received_at&order=asked_at.asc",
+      + "&select=id,market_id,seller_id,seller_name,message,asked_at,received_at&order=asked_at.asc",
       { headers: cloudHeaders() });
     if(!res.ok) throw new Error(String(res.status));
     const rows = await res.json();
@@ -2173,6 +2187,11 @@ async function loadRealFixes(day){
     REAL_FIXES = {}; REAL_FIXES_OK = false;
   }
 }
+
+/* The seller's name on anything reported: as sent, or - for a report that came
+   without one (set aside or queued at a hand-over, before names travelled with
+   the day) - from the owner's own list by the seller's id. */
+const nameOf = r => (r && (r.seller_name || ((r.seller_id && slr(r.seller_id)) || {}).name)) || null;
 
 // What one reported day looks like to the owner's screen.
 function dayFromCloud(row, m){
@@ -2197,7 +2216,7 @@ function dayFromCloud(row, m){
   const listPer = PRODUCTS.reduce((a,p)=>a+p.price,0)/PRODUCTS.length;
   const fixList = (REAL_FIXES[row.market_id] || []);
   return {
-    name: row.seller_name || "Nobody assigned",
+    name: nameOf(row) || "Nobody assigned",
     phone: null, sold, rev: broughtIn, out,
     status: "Closed", live: false,
     perPack: sold ? packMoney/sold : null, fullPer: listPer,
@@ -2599,7 +2618,7 @@ function shelveDay(day){
   const ownerId = copy.dayOwner || copy.me || null;
   list.push({ id, business: AUTH.business || null, owner: ownerId,
               // The name now, while this phone still holds it: after a hand-over it won't.
-              ownerName: ((ownerId && slr(ownerId)) || {}).name || null,
+              ownerName: ((ownerId && slr(ownerId)) || {}).name || copy.dayOwnerName || null,
               setAsideAt: new Date().toISOString(), day: copy, reportedAt: null, problem: null });
   // Only ever trim days the shop already knows about. It used to keep the last
   // five, whatever they were.
@@ -4020,11 +4039,11 @@ function compareSheets(list, first, firstSold, withDay){
     const sh = x.sheet || {};
     const when = new Date(x.refused_at).toLocaleString(undefined, withDay
       ? { weekday:"short", hour:"numeric", minute:"2-digit" } : { hour:"numeric", minute:"2-digit" });
-    const who = x.seller_name || "A seller";
-    const from = x.sender_name && x.sender_name !== x.seller_name ? ` &middot; sent from ${esc(x.sender_name)}'s phone` : "";
+    const who = nameOf(x) || "A seller";
+    const from = x.sender_name && x.sender_name !== who ? ` &middot; sent from ${esc(x.sender_name)}'s phone` : "";
     return `<div class="card-pad stack-sm" style="padding-top:0">
       <div class="lbl" style="color:var(--bad)">A second sheet couldn't go in</div>
-      <p class="note" style="margin:0">${esc(who)}'s sheet for this market, refused at ${esc(when)} because one was already in${from}. Each line shows ${first.seller_name ? esc(first.seller_name) + "'s" : "the"} counted sheet first, then this one; anything different is in red.</p>
+      <p class="note" style="margin:0">${esc(who)}'s sheet for this market, refused at ${esc(when)} because one was already in${from}. Each line shows ${nameOf(first) ? esc(nameOf(first)) + "'s" : "the"} counted sheet first, then this one; anything different is in red.</p>
       ${cmp("Items sold", firstSold, soldOf(x.counts), v => String(v))}
       ${cmp("Cash", Number(first.cash)||0, Number(sh.cash)||0, v => money2(v))}
       ${cmp("Square", Number(first.card)||0, Number(sh.card)||0, v => money2(v))}
@@ -4115,7 +4134,7 @@ function owner_market(mid){
           <div class="lbl" style="color:var(--bad)">${d.fixList.length === 1 ? "A fix asked for" : d.fixList.length + " fixes asked for"}</div>
           ${d.fixList.map(f => `<div class="hint" style="color:var(--ink)">
             <div>${esc(f.message)}</div>
-            <div class="sub" style="margin-top:6px">${esc(f.seller_name || "A seller")} &middot; asked ${esc(new Date(f.asked_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}))}</div>
+            <div class="sub" style="margin-top:6px">${esc(nameOf(f) || "A seller")} &middot; asked ${esc(new Date(f.asked_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"}))}</div>
           </div>`).join("")}
           <p class="note" style="font-size:12.5px">The numbers above are what was first sent. Nothing has been changed.</p>
         </div>` : !REAL_FIXES_OK ? `<div class="card-pad" style="padding-top:0">
@@ -4194,7 +4213,7 @@ function earlierNotices(){
           ${fx.length ? `<div class="lbl" style="color:var(--bad)">${fx.length === 1 ? "A fix asked for" : fx.length + " fixes asked for"}</div>
           ${fx.map(f => `<div class="hint" style="color:var(--ink)">
             <div>${esc(f.message)}</div>
-            <div class="sub" style="margin-top:6px">${esc(f.seller_name || "A seller")} &middot; asked ${esc(new Date(f.asked_at).toLocaleString(undefined, { weekday:"short", hour:"numeric", minute:"2-digit" }))}</div>
+            <div class="sub" style="margin-top:6px">${esc(nameOf(f) || "A seller")} &middot; asked ${esc(new Date(f.asked_at).toLocaleString(undefined, { weekday:"short", hour:"numeric", minute:"2-digit" }))}</div>
           </div>`).join("")}
           <p class="note" style="font-size:12.5px">What was first sent for that day hasn't been changed.</p>` : ""}
         </div>
@@ -4280,32 +4299,19 @@ function owner_today(){
          sample history exists to show what the screens do; put a real name
          next to it and Nawid takes a number nobody earned to a real seller.
 
-         So until enough real days have been reported, it says what it will
-         do and names nobody. */
-      const realDays = REAL_DAYS ? Object.keys(REAL_DAYS).length : 0;
-      if(realDays < 8){
-        return `<div class="insight">
-          <div class="insight-mark">Once the days add up</div>
-          <p>This is where the app tells you <b>whose packs bring in the least money each</b>,
-          and by how much across everything they have sold. It needs real reported days first
-          &mdash; ${realDays === 0 ? "none have come in yet" : realDays + " so far"}. Nothing here is
-          guessed at, because a guess with somebody's name on it is worse than nothing.</p>
-        </div>`;
-      }
-      const crew = crewYield();
-      const recs = SELLERS.map(s=>({s, r:yieldRecord(s.id)})).filter(x=>x.r.sold>0);
-      if(recs.length < 2) return "";
-      const low = recs.slice().sort((a,b)=>a.r.per-b.r.per)[0];
-      const behind = crew - low.r.per;
-      if(behind < 0.5) return "";
-      const first = low.s.name.split(" ")[0];
+         It used to open once eight markets had reported - but it counted
+         today's markets, not weeks of real days, so every Saturday and Sunday
+         it named a real seller with numbers from the made-up history ("<name>'s
+         packs bring in $10.82 ... across 757 packs"), none of them true. Real
+         yield needs weeks of real days and isn't built on them yet, so until it
+         is, it says what it will do and names nobody - on every phone. */
       return `<div class="insight">
-        <div class="insight-mark">Heads up</div>
-        <p><b>${esc(first)}'s packs bring in ${money2(low.r.per)} each.</b>
-        The crew averages ${money2(crew)}. Across the ${low.r.sold} packs ${esc(first)} has sold,
-        that gap is ${money(behind*low.r.sold)} &mdash; free ones, deals and trades all land in it.
-        Worth asking about, not worth accusing anyone over.</p>
-      </div>`;
+          <div class="insight-mark">Once the days add up</div>
+          <p>This is where the app will tell you <b>whose packs bring in the least money each</b>,
+          and by how much across everything they have sold. It needs weeks of real reported days
+          first, so for now it stays empty. Nothing here is guessed at, because a guess with
+          somebody's name on it is worse than nothing.</p>
+        </div>`;
     })()}
     <div class="card">
       <div class="card-hd"><h3>Message to the crew</h3><span class="pill">${NOTE.trim()?"saved "+esc(NOTE_AT):"nothing saved"}</span></div>
@@ -4324,7 +4330,7 @@ function owner_today(){
 
     ${REAL_UNFINISHED.length ? `<h2 class="sec">Packed but never counted up</h2>
     <div class="stack-sm">${REAL_UNFINISHED.map(u => {
-      const n = Number(u.items_out) || 0, who = u.seller_name || "The seller";
+      const n = Number(u.items_out) || 0, who = nameOf(u) || "The seller";
       const when = new Date(u.day_date + "T12:00:00").toLocaleDateString(undefined, { weekday:"long", month:"short", day:"numeric" });
       const reached = u.reached === "closeout" ? "started counting up but never sent it"
                     : u.reached === "market" ? "set up at the market and never counted up"
@@ -4338,7 +4344,7 @@ function owner_today(){
           <span class="pill pill-warn">${n} out</span></div>
         <p class="note">${esc(who)} ${reached}${u.packed_at ? " (packed " + esc(u.packed_at) + ")" : ""}. None of these ${n} items are in the numbers yet &mdash; worth asking what happened to them.</p>
         ${flavours ? `<div class="chips">${flavours}</div>` : ""}
-        ${u.reporter_name && u.reporter_name !== u.seller_name ? `<p class="note" style="font-size:12.5px">Reported from ${esc(u.reporter_name)}'s phone, after it was handed over.</p>` : ""}
+        ${u.reporter_name && u.reporter_name !== who ? `<p class="note" style="font-size:12.5px">Reported from ${esc(u.reporter_name)}'s phone, after it was handed over.</p>` : ""}
       </div>`;
     }).join("")}</div>` : ""}
     ${earlierNotices()}
@@ -4769,6 +4775,7 @@ document.addEventListener("click", e => {
       S.status="closed"; S.endedAt=Date.now();
       if(!S.submittedAt) S.submittedAt = new Date().toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"});
       if(!S.submittedBy) S.submittedBy = S.me;
+      if(!S.submittedByName) S.submittedByName = (slr(S.submittedBy) || {}).name || (AUTH.person === S.submittedBy ? AUTH.name : null) || null;
       // Fire and forget: a market with no signal must not block the screen.
       sendDay().then(() => render());
     }
