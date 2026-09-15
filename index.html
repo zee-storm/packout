@@ -2528,15 +2528,19 @@ function setAsideOldDay(){
     return f;
   };
 
-  // A counted day from an earlier date, and a new market to work today.
-  if(S.parkMe && !S.sentAt && S.submittedAt && myMarketToday() && !AUTH.demo){
+  /* A counted day from an earlier date that hasn't reached the shop goes into the
+     queue as soon as the date has moved on - it keeps trying from there, and the
+     "not at the shop yet" card shows it. It used to wait for a market of the
+     seller's own today, so someone with nothing rostered (covering a Thursday
+     market, say) was stuck on yesterday's Day's done with no way to start. */
+  if(S.parkMe && !S.sentAt && S.submittedAt && !AUTH.demo){
     const list = loadOutbox();
     list.push({
       id: newId(),
       business: AUTH.business,
       payload: dayPayload(),              // S is still the waiting day here
       counts: countRows(null),
-      market: MY_MARKET.name, day: S.dayOf,
+      market: (dayMarket() || MY_MARKET).name, day: S.dayOf,
       problem: S.sendError || null,
       parkedAt: new Date().toISOString(), sentAt: null,
       /* Already reported as a second sheet, it keeps that report. Without it the
@@ -2774,7 +2778,11 @@ async function sendOutboxNow(){
     const list = loadOutbox();
     const item = list.find(x => x.id === e.id);
     if(item){
-      Object.assign(item, ok ? { sentAt:new Date().toISOString(), problem:null } : { problem });
+      /* A day already refused as a second sheet stays a second sheet when a later
+         try simply finds no signal - its card said "keeps trying, nothing is lost"
+         in between, as if it might still go in. */
+      const stillClash = (problem === "nosignal" || problem === "failed") && (item.problem === "clash" || item.secondSheetId);
+      Object.assign(item, ok ? { sentAt:new Date().toISOString(), problem:null } : { problem: stillClash ? "clash" : problem });
       if(e.secondSheetId) item.secondSheetId = e.secondSheetId;
       saveOutbox(list);
     }
