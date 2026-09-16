@@ -3125,6 +3125,23 @@ async function keepAwake(on){
    14 Sep. navigator.standalone exists only on iPhone and iPad, and is false in
    the browser there (iPads included, whatever they call themselves). */
 const IN_IPHONE_BROWSER = navigator.standalone === false;
+/* Android phones can offer the real thing: the browser tells the page it could
+   be installed, and one tap puts it on the home screen. No link can do that by
+   itself - every phone makes the person agree - so this is as close as it gets.
+   iPhones never send this, which is why they get the steps above instead. */
+let INSTALL_OFFER = null;
+const ON_HOME_SCREEN = () => navigator.standalone === true
+  || !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); INSTALL_OFFER = e; try{ render(); }catch(x){} });
+window.addEventListener("appinstalled", () => { INSTALL_OFFER = null; try{ render(); }catch(x){} });
+function installCard(){
+  if(!INSTALL_OFFER || ON_HOME_SCREEN()) return "";
+  return `<div class="card card-pad stack-sm stripe stripe-live">
+      <div class="lbl">Put PackOut on your phone</div>
+      <p class="note">One tap. It opens like an app, works at a market with no signal, and your day stays on your own phone.</p>
+      <button class="btn" data-act="install-app">Add PackOut to your phone</button>
+    </div>`;
+}
 function iphoneBrowserNote(){
   if(!IN_IPHONE_BROWSER || !AUTH.person || AUTH.demo) return "";
   return `<div class="hint">You're signed in to PackOut in this browser &mdash; keep using it here. Adding it to your Home Screen would need a new code from Nawid.</div>`;
@@ -3139,6 +3156,7 @@ function scr_whoami(){
       <h1 class="page" style="margin-top:6px">Enter your code</h1>
       <p class="note" style="margin-top:5px">Nawid sends you a short code, six letters and numbers. You type it once, on your own phone, and never again.</p>
     </div>
+    ${installCard()}
     ${installFirst ? `<div class="card card-pad stack-sm stripe stripe-warn">
       <div class="lbl">On an iPhone, do this first</div>
       <p class="note"><b>Put PackOut on your Home Screen, then type your code there.</b> A code only works once, and the Home Screen app can't see a code typed here.</p>
@@ -3201,7 +3219,7 @@ function scr_dayoff(){
     <button class="btn btn-quiet" data-act="switch-me">Not ${esc(me()?me().name:"you")}?</button>
   </div>`;
   return `<div class="pad stack">
-    ${unfinishedNotice()}${iphoneBrowserNote()}
+    ${unfinishedNotice()}${iphoneBrowserNote()}${installCard()}
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">Nothing on today</h1>
@@ -3247,7 +3265,7 @@ function scr_today(){
 
   return `
   <div class="pad stack">
-    ${catalogueNotice()}${unfinishedNotice()}${iphoneBrowserNote()}
+    ${catalogueNotice()}${unfinishedNotice()}${iphoneBrowserNote()}${installCard()}
     <div>
       <div class="lbl">${esc(fmtDate(TODAY))}</div>
       <h1 class="page" style="margin-top:6px">${esc(MY_MARKET.name)}</h1>
@@ -4884,6 +4902,13 @@ document.addEventListener("click", e => {
     // Only ever the made-up people in the look-around.
     if(CATALOGUE.source !== "demo"){ save(); location.replace(location.pathname); return; }
     render(); window.scrollTo(0,0); return;
+  }
+  if(t.dataset.act==="install-app"){
+    const offer = INSTALL_OFFER; INSTALL_OFFER = null;
+    if(!offer) return;
+    try{ offer.prompt(); }catch(e){}
+    Promise.resolve(offer.userChoice).catch(() => null).then(() => render());
+    render(); return;
   }
   if(t.dataset.act==="catalogue-retry"){
     toast("Trying\u2026");
