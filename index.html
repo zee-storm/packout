@@ -271,6 +271,9 @@ button{font-family:inherit;color:inherit}
 .crewrow:first-child{border-top:0}
 .crewrow-l{display:flex;flex-direction:column;gap:2px;min-width:0}
 .pill-wrap{white-space:normal;text-align:left}
+.frow{display:grid;grid-template-columns:minmax(0,1fr) 92px 30px;gap:10px;align-items:center;padding:6px 14px;font-size:13px}
+.frow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frow .v{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
 .crewmkt{padding:10px 0;border-top:1px solid var(--line)}
 .crewmkt:first-of-type{border-top:0}
 .bigcode{font-size:34px;font-weight:700;letter-spacing:.14em;font-variant-numeric:tabular-nums}
@@ -4446,6 +4449,7 @@ function owner_send(){
       <h1 class="page" style="margin-top:6px">Send list</h1>
       <p class="note" style="margin-top:5px">By market and by product, rounded to full cases.</p>
     </div>
+    ${flavourCard()}
     <div class="card card-pad stripe stripe-warn">
       <div class="lbl">Sample figures</div>
       <p class="note" style="margin-top:6px">Every number on this screen is worked from made-up days,
@@ -5719,6 +5723,88 @@ function sendAdviceCard(mid){
   </div>`;
 }
 
+/* ---------------------------------------------------------------
+   Flavour report card.
+
+   Flavours come and go week to week, and which ones to make has been a guess.
+   This is the whole business's real counts for the last four weeks: how many
+   of each went out, how many sold, how many came back damaged, and - the one
+   number worth ranking on - how many sold out of every hundred that went out.
+
+   Salsas are listed on their own. They are cheaper and bought differently, so
+   ranking them against tamales would push them down the page for no reason.
+   A flavour nobody sent shows nothing at all, never a zero: not made that
+   week is not the same as made and unsold.
+   --------------------------------------------------------------- */
+const FLAV_DAYS = 28;
+const FLAV_MIN_DAYS = 5;        // fewer days than this and the counts say little
+/* A flavour needs a real quantity behind it before it is ranked. One real
+   week had six pumpkins go out and all six given away as samples: sold 0 of
+   100, ranked last, which says nothing true about pumpkin. */
+const FLAV_MIN_OUT = 10;
+
+function flavourReport(){
+  const from = localDay(daysAgo(FLAV_DAYS)), today = todayStamp();
+  const days = PAST.days.filter(d => d.day_date >= from && d.day_date <= today && (d.day_counts || []).length);
+  const per = {};
+  days.forEach(d => (d.day_counts || []).forEach(c => {
+    const a = per[c.product_id] = per[c.product_id] || { out:0, back:0, samples:0, damaged:0 };
+    a.out += c.went_out; a.back += c.came_back; a.samples += c.samples; a.damaged += c.damaged;
+  }));
+  const rows = PRODUCTS.map(p => {
+    const a = per[p.id];
+    if(!a || !a.out) return { p, sent:false };
+    const sold = Math.max(0, a.out - a.back - a.samples - a.damaged);
+    return { p, sent:true, out:a.out, sold, samples:a.samples, damaged:a.damaged,
+             thin: a.out < FLAV_MIN_OUT, per100: Math.round(sold / a.out * 100) };
+  });
+  return { days: days.length, rows };
+}
+
+function flavourCard(){
+  if(AUTH.demo) return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">Flavour report card · example</div>
+      <p class="note">On a real sign-in this puts every flavour's real counts from the last four weeks side by side - how many sold out of every hundred that went out - with salsas on their own. Nothing in the look-around is real.</p>
+    </div>`;
+  if(!pastCanRead() || !PAST.on) return "";
+
+  const r = flavourReport();
+  if(r.days < FLAV_MIN_DAYS) return `<div class="card card-pad stack-sm">
+      <div class="lbl">Flavour report card</div>
+      <p class="note">${r.days ? r.days + (r.days === 1 ? " day has" : " days have") + " been counted in the last four weeks." : "No counted days in the last four weeks."} It takes about ${FLAV_MIN_DAYS} before one flavour can be told from another, so there is nothing to show yet.</p>
+    </div>`;
+
+  const sent = r.rows.filter(x => x.sent && !x.thin);
+  const thin = r.rows.filter(x => x.sent && x.thin);
+  const missing = r.rows.filter(x => !x.sent);
+  const line = x => `<div class="frow">
+      <span class="nm">${esc(x.p.name)}<span class="sub"> · ${x.out} out${x.damaged ? ", " + x.damaged + " damaged" : ""}</span></span>
+      <span class="bar"><i style="width:${Math.max(2, x.per100)}%"></i></span>
+      <span class="v">${x.per100}</span>
+    </div>`;
+  const group = (label, kind) => {
+    const list = sent.filter(x => (kind === "tamale" ? x.p.kind === "tamale" : x.p.kind !== "tamale"))
+                     .sort((a, b) => b.per100 - a.per100);
+    if(!list.length) return "";
+    return `<div class="frow" style="padding-block:6px 4px"><span class="lbl">${label}</span><span class="lbl" style="text-align:right">sold of every 100 out</span><span></span></div>
+      ${list.map(line).join("")}`;
+  };
+
+  return `<div class="card">
+    <div class="card-hd"><div><h3>Flavour report card</h3><div class="sub" style="margin-top:3px">All markets · last four weeks · ${r.days} counted ${r.days === 1 ? "day" : "days"}</div></div></div>
+    <div style="padding:6px 0">
+      ${group("Tamales", "tamale")}
+      ${group("Salsas", "salsa")}
+    </div>
+    ${thin.length ? `<div class="card-pad" style="border-top:1px solid var(--line)">
+      <p class="note">Too few to rank: ${thin.map(x => esc(x.p.name) + " (" + x.out + " out" + (x.samples ? ", " + x.samples + " given away" : "") + ")").join(", ")}. Under ${FLAV_MIN_OUT} in four weeks says nothing either way.</p>
+    </div>` : ""}
+    ${missing.length ? `<div class="card-pad" style="border-top:1px solid var(--line)">
+      <p class="note">Not sent at all in the last four weeks: ${missing.map(x => esc(x.p.name)).join(", ")}. Nothing is shown for them — not made is not the same as not sold.</p>
+    </div>` : ""}
+  </div>`;
+}
+
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
@@ -6065,7 +6151,7 @@ document.addEventListener("click", e => {
     S.mode="owner"; render();
     loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
     if(S.tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(["leads","envelopes","markets"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets"].indexOf(S.tab)>=0) render(); });
+    if(["leads","envelopes","markets","send"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send"].indexOf(S.tab)>=0) render(); });
     return;
   }
 
@@ -6074,7 +6160,7 @@ document.addEventListener("click", e => {
     S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
     if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
     if(tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(tab==="leads" || tab==="envelopes" || tab==="markets") loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets"].indexOf(S.tab)>=0) render(); });
+    if(["leads","envelopes","markets","send"].indexOf(tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send"].indexOf(S.tab)>=0) render(); });
     return;
   }
 
@@ -6529,7 +6615,7 @@ verifySent();
 if(S.mode === "owner" && canSeeOwner()){
   loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
   if(S.tab === "people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-  if(["leads","envelopes","markets"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets"].indexOf(S.tab)>=0) render(); });
+  if(["leads","envelopes","markets","send"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send"].indexOf(S.tab)>=0) render(); });
 }
 
 function resendIfPending(){
