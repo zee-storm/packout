@@ -270,6 +270,7 @@ button{font-family:inherit;color:inherit}
   font:inherit;color:inherit;text-align:left;cursor:pointer}
 .crewrow:first-child{border-top:0}
 .crewrow-l{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pill-wrap{white-space:normal;text-align:left}
 .crewmkt{padding:10px 0;border-top:1px solid var(--line)}
 .crewmkt:first-of-type{border-top:0}
 .bigcode{font-size:34px;font-weight:700;letter-spacing:.14em;font-variant-numeric:tabular-nums}
@@ -5348,6 +5349,144 @@ async function leadTap(act){
   render();
 }
 
+/* ---------------------------------------------------------------
+   The envelope check.
+
+   Sellers take everything the shop owes them - pay, driving, gas, and
+   anything they paid for out of their own pocket - straight out of that day's
+   cash, and the rest goes in the envelope. They start with no change in the
+   till (both confirmed by the owner, 17 Sep). So the envelope is simply the
+   cash minus what they took, and that is the one number the app could never
+   show: what should be in the safe tonight.
+
+   On a card-heavy day the cash can be less than they are owed. Then the
+   envelope is empty and the shop still owes the difference - never a minus.
+   --------------------------------------------------------------- */
+const ENV_DAYS = 14;
+let ENV_OPEN = null;
+
+// Was this day paid on the shop's usual $150 because nobody set a day rate?
+function rateGuessed(sid, mid){
+  const m = mid ? mkt(mid) : null;
+  const over = (m && m.payBy) ? m.payBy[sid] : null;
+  if(over && over.basePay != null) return false;
+  const s = slr(sid);
+  return !(s && typeof s.basePay === "number");
+}
+
+function envelopeFor(d){
+  const other = (d.other_pays || []).reduce((a, o) => a + (Number(o.amount) || 0), 0);
+  const cash = Number(d.cash) || 0;
+  const gross = cash + (Number(d.card) || 0) + other + (Number(d.spent_from_till) || 0);
+  const pay = sentDayPay(d, gross);
+  const fronted = Number(d.fronted) || 0, driving = Number(d.driving_pay) || 0, gas = Number(d.car_gas) || 0;
+  const owed = pay.amount + fronted + driving + gas;
+  const market = mkt(d.market_id) || {};
+  return {
+    id: d.id, date: d.day_date, seller: nameOf(d) || "Nobody named",
+    market: market.name || d.market_name || d.market_id,
+    cash, gross, pay, owed, fronted, driving, gas,
+    envelope: Math.max(0, cash - owed),
+    short: Math.max(0, owed - cash),
+    guessed: rateGuessed(d.seller_id, d.market_id),
+    // A day with a fix asked or a second sheet may be about to change.
+    fix: PAST.fixes.some(f => f.market_id === d.market_id && f.day_date === d.day_date),
+    second: PAST.seconds.some(x => x.market_id === d.market_id && x.day_date === d.day_date)
+  };
+}
+
+function envelopeLines(e){
+  const money2 = n => "$" + n.toFixed(2);
+  const rows = [["Cash taken", money2(e.cash)]];
+  rows.push([e.pay.kind === "commission"
+    ? "Their pay — " + crewPct(e.pay.rate) + "% of " + money(e.gross)
+    : "Their pay — day rate", "−" + money2(e.pay.amount)]);
+  if(e.fronted) rows.push(["Paid back, out of their pocket", "−" + money2(e.fronted)]);
+  if(e.driving) rows.push(["Driving", "−" + money2(e.driving)]);
+  if(e.gas) rows.push(["Gas", "−" + money2(e.gas)]);
+  return `<div class="detail" style="margin-top:6px">
+    ${rows.map(([k, v]) => `<div class="kv"><span class="kv-k">${k}</span><span class="kv-v">${v}</span></div>`).join("")}
+    <div class="kv kv-total"><span class="kv-k">${e.short ? "Cash didn't cover it" : "Envelope should hold"}</span><span class="kv-v">${e.short ? money2(e.short) + " still owed" : money2(e.envelope)}</span></div>
+  </div>`;
+}
+
+function envelopeRow(e){
+  const open = ENV_OPEN === e.id;
+  const chips = [
+    e.short ? `<span class="pill pill-warn pill-wrap">cash covered ${money(e.cash)} — shop still owes ${money(e.short)}</span>` : "",
+    e.fix ? `<span class="pill pill-warn pill-wrap">a fix was asked — may not match</span>` : "",
+    e.second ? `<span class="pill pill-warn pill-wrap">a second sheet came in — may not match</span>` : "",
+    e.guessed ? `<span class="pill pill-wrap">no day rate set — paid the usual ${money(BASE_PAY_DEFAULT)}</span>` : ""
+  ].filter(Boolean).join(" ");
+  return `<button class="crewrow" data-act="env-open:${esc(e.id)}" style="align-items:flex-start">
+    <span class="crewrow-l">
+      <span class="who">${esc(e.seller)} <span class="sub">· ${esc(e.market)}</span></span>
+      <span class="sub">cash ${money(e.cash)} · they took ${money(e.owed)}</span>
+      ${chips ? `<span class="chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:4px">${chips}</span>` : ""}
+      ${open ? envelopeLines(e) : ""}
+    </span>
+    <span class="kv-v">${"$" + e.envelope.toFixed(2)}</span>
+  </button>`;
+}
+
+function owner_envelopes(){
+  const head = note => `<div>
+      <h1 class="page">Envelopes</h1>
+      <p class="note" style="margin-top:5px">${note}</p>
+    </div>`;
+
+  if(AUTH.demo) return `<div class="pad stack">
+    ${head("What should be in each envelope in the safe: the cash the seller took, less everything they were owed and took out of it.")}
+    <div class="card card-pad stripe stripe-warn"><div class="lbl">Example</div>
+      <p class="note" style="margin-top:6px">Nothing here is real in the look-around.</p></div>
+    <div class="card"><div class="crewlist">
+      <button class="crewrow" style="align-items:flex-start"><span class="crewrow-l">
+        <span class="who">A seller <span class="sub">· A Saturday market</span></span>
+        <span class="sub">cash $620 · they took $256</span></span><span class="kv-v">$364.00</span></button>
+      <button class="crewrow" style="align-items:flex-start"><span class="crewrow-l">
+        <span class="who">Another seller <span class="sub">· A Sunday market</span></span>
+        <span class="sub">cash $90 · they took $307</span>
+        <span class="chips" style="display:flex;gap:5px;margin-top:4px"><span class="pill pill-warn pill-wrap">cash covered $90 — shop still owes $217</span></span></span><span class="kv-v">$0.00</span></button>
+    </div></div>
+  </div>`;
+
+  if(!PAST.on) return `<div class="pad stack">
+    ${head(PAST.failed ? "Couldn't get your days from the shop. It's usually signal - try again in a moment." : "Loading the last two weeks…")}
+    ${PAST.failed ? `<button class="btn btn-quiet btn-sm" data-act="past-retry" style="width:auto">Try again</button>` : ""}
+  </div>`;
+
+  const from = localDay(daysAgo(ENV_DAYS));
+  const days = PAST.days.filter(d => d.day_date >= from).map(envelopeFor);
+  if(!days.length) return `<div class="pad stack">
+    ${head("No days sent in the last two weeks, so there is nothing to check.")}
+  </div>`;
+
+  const dates = [...new Set(days.map(d => d.date))].sort().reverse();
+  const first = dates[0];
+  const top = days.filter(d => d.date === first);
+  const inSafe = top.reduce((a, d) => a + d.envelope, 0);
+  const owedStill = top.reduce((a, d) => a + d.short, 0);
+  const check = top.filter(d => d.fix || d.second).length;
+  const dayName = s => new Date(s + "T12:00:00").toLocaleDateString(undefined, { weekday:"long", day:"numeric", month:"short" });
+
+  return `<div class="pad stack">
+    ${head("Sellers take what they're owed out of the day's cash and start with no change, so this is the whole envelope.")}
+    <div>
+      <div class="lbl">${esc(dayName(first))} · ${top.length} ${top.length === 1 ? "sheet" : "sheets"} in</div>
+      <div class="row" style="gap:8px;margin-top:8px">
+        <div class="card card-pad" style="flex:1"><div class="lbl">In the safe</div><div class="mid" style="margin-top:5px">${money(inSafe)}</div></div>
+        <div class="card card-pad" style="flex:1"><div class="lbl">Still owed</div><div class="mid" style="margin-top:5px">${money(owedStill)}</div></div>
+        <div class="card card-pad" style="flex:1"><div class="lbl">Worth a look</div><div class="mid" style="margin-top:5px">${check}</div></div>
+      </div>
+    </div>
+    ${dates.map(dt => `<div class="card">
+      <div class="card-hd"><h3>${esc(dayName(dt))}</h3><span class="pill">${money(days.filter(d => d.date === dt).reduce((a, d) => a + d.envelope, 0))} in the safe</span></div>
+      <div class="crewlist">${days.filter(d => d.date === dt).map(envelopeRow).join("")}</div>
+    </div>`).join("")}
+    <div class="hint">Tap a seller to see how it was worked out, line by line - the same lines their own phone showed them.</div>
+  </div>`;
+}
+
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
@@ -5515,8 +5654,8 @@ const SELLER_SCREENS = { today:[scr_today,foot_today], loadout:[scr_loadout,foot
   market:[scr_market,foot_market],
   closeout:[scr_closeout,foot_closeout], result:[scr_result,null] };
 
-const OWNER_TABS = [["today","Today"],["leads","Big orders"],["send","Send list"],["people","People"],["markets","Markets"]];
-const OWNER_SCREENS = { today:owner_today, leads:owner_leads, send:owner_send, people:owner_people, markets:owner_markets };
+const OWNER_TABS = [["today","Today"],["envelopes","Envelopes"],["leads","Big orders"],["send","Send list"],["people","People"],["markets","Markets"]];
+const OWNER_SCREENS = { today:owner_today, envelopes:owner_envelopes, leads:owner_leads, send:owner_send, people:owner_people, markets:owner_markets };
 
 /* The sticky footer is fixed, so it sits outside the flow and reserves no room
    on its own. Its height changes with the screen -- one button on Today, two
@@ -5682,6 +5821,10 @@ document.addEventListener("click", e => {
   if(t.dataset.act==="market-close"){ S.marketOpen=null; render(); window.scrollTo(0,0); return; }
   if(t.dataset.act==="past-retry"){ loadRealPast(true).then(()=>render()); render(); return; }
   if(t.dataset.act && t.dataset.act.indexOf("lead-") === 0){ leadTap(t.dataset.act); return; }
+  if(t.dataset.act && t.dataset.act.indexOf("env-open:") === 0){
+    const id = t.dataset.act.slice(9);
+    ENV_OPEN = ENV_OPEN === id ? null : id; render(); return;
+  }
 
   if(t.id==="m-seller"){ S.mode="seller"; S.marketOpen=null; render(); return; }
   if(t.id==="m-owner"){
@@ -5689,7 +5832,7 @@ document.addEventListener("click", e => {
     S.mode="owner"; render();
     loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
     if(S.tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(S.tab==="leads") loadRealPast().then(()=>{ if(S.mode==="owner" && S.tab==="leads") render(); });
+    if(S.tab==="leads" || S.tab==="envelopes") loadRealPast().then(()=>{ if(S.mode==="owner" && (S.tab==="leads" || S.tab==="envelopes")) render(); });
     return;
   }
 
@@ -5698,7 +5841,7 @@ document.addEventListener("click", e => {
     S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
     if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
     if(tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(tab==="leads") loadRealPast().then(()=>{ if(S.mode==="owner" && S.tab==="leads") render(); });
+    if(tab==="leads" || tab==="envelopes") loadRealPast().then(()=>{ if(S.mode==="owner" && (S.tab==="leads" || S.tab==="envelopes")) render(); });
     return;
   }
 
@@ -6153,7 +6296,7 @@ verifySent();
 if(S.mode === "owner" && canSeeOwner()){
   loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
   if(S.tab === "people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-  if(S.tab === "leads") loadRealPast().then(()=>{ if(S.mode==="owner" && S.tab==="leads") render(); });
+  if(S.tab === "leads" || S.tab === "envelopes") loadRealPast().then(()=>{ if(S.mode==="owner" && (S.tab==="leads" || S.tab==="envelopes")) render(); });
 }
 
 function resendIfPending(){
