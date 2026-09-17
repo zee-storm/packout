@@ -279,6 +279,8 @@ button{font-family:inherit;color:inherit}
 .crewrow:first-child{border-top:0}
 .crewrow-l{display:flex;flex-direction:column;gap:2px;min-width:0}
 .pill-wrap{white-space:normal;text-align:left}
+.mrow{padding:10px 14px;border-bottom:1px solid var(--glass-line-2)}
+.mrow:last-child{border-bottom:0}
 .frow{display:grid;grid-template-columns:minmax(0,1fr) 92px 30px;gap:10px;align-items:center;padding:6px 14px;font-size:13px}
 .frow .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .frow .v{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
@@ -5815,6 +5817,85 @@ function flavourCard(){
   </div>`;
 }
 
+/* ---------------------------------------------------------------
+   What each market leaves the shop.
+
+   A market can look big and still leave little once the seller is paid. For
+   each market: an average day's money in, and what is left after the seller's
+   pay and what the day cost them out of pocket.
+
+   Driving pay stays out on purpose - one van run serves two markets, so
+   charging it to one of them would be wrong. Stall fees stay out because the
+   app only has a guessed range, and the cost of making the food is not in the
+   app at all. So this is "before stall fees", and it says so.
+
+   Money in is what the seller brought in: cash, card and other payments.
+   Money spent out of the till was collected and then spent, so it cancels
+   out on both sides.
+   --------------------------------------------------------------- */
+const LEAVES_MIN_DAYS = 4;
+
+function marketLeaves(){
+  const from = localDay(daysAgo(PAST_WEEKS * 7));
+  const by = {};
+  PAST.days.filter(d => d.day_date >= from).forEach(d => {
+    const a = by[d.market_id] = by[d.market_id] || { days:0, inn:0, pay:0, spent:0, guessed:0 };
+    const other = (d.other_pays || []).reduce((x, o) => x + (Number(o.amount) || 0), 0);
+    const broughtIn = (Number(d.cash) || 0) + (Number(d.card) || 0) + other;
+    const gross = broughtIn + (Number(d.spent_from_till) || 0);
+    a.days++;
+    a.inn += broughtIn;
+    a.pay += sentDayPay(d, gross).amount;
+    a.spent += (Number(d.fronted) || 0) + (Number(d.car_gas) || 0);
+    if(rateGuessed(d.seller_id, d.market_id)) a.guessed++;
+  });
+  return Object.keys(by).map(mid => {
+    const a = by[mid], m = mkt(mid) || { name: mid, day: "" };
+    const inn = a.inn / a.days, cost = (a.pay + a.spent) / a.days;
+    return { mid, name: m.name, day: m.day, days: a.days, inn, cost,
+             left: inn - cost, share: inn ? (a.pay / a.days) / inn : 0,
+             guessed: a.guessed, early: a.days < LEAVES_MIN_DAYS };
+  }).sort((x, y) => y.left - x.left);
+}
+
+function leavesCard(){
+  if(AUTH.demo) return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">What each market leaves · example</div>
+      <p class="note">On a real sign-in this ranks your markets by what an average day leaves the shop once the seller is paid - from real days, not made-up ones. Nothing in the look-around is real.</p>
+    </div>`;
+  if(!pastCanRead() || !PAST.on) return "";
+
+  const rows = marketLeaves();
+  if(!rows.length) return "";
+  const ready = rows.filter(r => !r.early), early = rows.filter(r => r.early);
+  const bar = r => {
+    const pct = r.inn > 0 ? Math.max(0, Math.min(100, Math.round(r.left / r.inn * 100))) : 0;
+    return `<div class="mrow">
+      <div class="spread" style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">
+        <span><b>${esc(r.name)}</b> <span class="sub">${esc(r.day)} · ${r.days} ${r.days === 1 ? "day" : "days"}</span></span>
+        <span class="kv-v">${money(r.left)} <span class="sub">of ${money(r.inn)}</span></span>
+      </div>
+      <div class="bar" style="margin-top:6px"><i style="width:${pct}%"></i></div>
+      ${r.left < 0 ? `<div class="sub" style="margin-top:4px">the seller's pay came to more than the day brought in</div>`
+        : r.share > 0.3 ? `<div class="sub" style="margin-top:4px">the seller's pay is ${Math.round(r.share * 100)}% of the money in</div>` : ""}
+      ${r.guessed ? `<div class="sub" style="margin-top:2px">${r.guessed === r.days ? "no day rate set for who works it" : r.guessed + " of these days had no day rate set"}</div>` : ""}
+    </div>`;
+  };
+
+  return `<div class="card">
+    <div class="card-hd"><div><h3>What each market leaves</h3><div class="sub" style="margin-top:3px">An average day, before stall fees · last ${PAST_WEEKS} weeks</div></div></div>
+    ${ready.length ? `<div>${ready.map(bar).join("")}</div>`
+      : `<div class="card-pad" style="padding-bottom:0"><p class="note">No market has ${LEAVES_MIN_DAYS} days in yet, so there is nothing worth ranking. They are listed below as they build up.</p></div>`}
+    ${early.length ? `<div class="card-pad" style="border-top:1px solid var(--line)">
+      <div class="lbl">Still early</div>
+      <p class="note" style="margin-top:4px">${early.map(r => esc(r.name) + " (" + r.days + ")").join(", ")} — under ${LEAVES_MIN_DAYS} days each, so the average moves too much to rank them yet.</p>
+    </div>` : ""}
+    <div class="card-pad" style="border-top:1px solid var(--line)">
+      <p class="note">Money in is cash, card and other payments. Taken off: the seller's pay, what they paid for out of their own pocket, and gas for their own car. <b>Not</b> taken off: driving pay (one van run serves two markets), the stall fee, or what the food costs to make.</p>
+    </div>
+  </div>`;
+}
+
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
@@ -5927,6 +6008,7 @@ function owner_markets(){
       <h1 class="page">Markets</h1>
       <p class="note" style="margin-top:5px">Sorted by what each one actually pays per hour worked \u2014 including packing, driving both ways, setup and teardown. Not just the four hours of selling.</p>
     </div>
+    ${leavesCard()}
     ${paperworkCard()}
     <div class="card card-pad stripe stripe-warn">
       <div class="lbl">Sample figures</div>
