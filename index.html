@@ -264,6 +264,15 @@ button{font-family:inherit;color:inherit}
 .pad{padding:18px 16px}
 .stack{display:flex;flex-direction:column;gap:14px}
 .stack-sm{display:flex;flex-direction:column;gap:8px}
+.crewlist{display:flex;flex-direction:column}
+.crewrow{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+  padding:14px 16px;background:none;border:0;border-top:1px solid var(--line);
+  font:inherit;color:inherit;text-align:left;cursor:pointer}
+.crewrow:first-child{border-top:0}
+.crewrow-l{display:flex;flex-direction:column;gap:2px;min-width:0}
+.crewmkt{padding:10px 0;border-top:1px solid var(--line)}
+.crewmkt:first-of-type{border-top:0}
+.bigcode{font-size:34px;font-weight:700;letter-spacing:.14em;font-variant-numeric:tabular-nums}
 .row{display:flex;align-items:center;gap:10px}
 .row-b{display:flex;align-items:baseline;gap:10px}
 .spread{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -773,12 +782,26 @@ function rateFor(sid, mid){
 const basePayFor = sid => rateFor(sid, null).base;
 
 // The floor and the commission do not stack: whichever is more.
-function dayPay(sid, took, mid){
-  const { base, rate } = rateFor(sid, mid || null);
+function payAt(base, rate, took){
   const commission = took * rate;
   return commission >= base
     ? { amount: commission, kind: "commission", commission, base, rate }
     : { amount: base,       kind: "base",       commission, base, rate };
+}
+function dayPay(sid, took, mid){
+  const { base, rate } = rateFor(sid, mid || null);
+  return payAt(base, rate, took);
+}
+/* A day that has been sent is paid at the rate it was sent under, which the
+   database writes onto the day as it arrives (db/038). Working it out again
+   from today's rate meant a raise given on Friday changed what the shop owed
+   for every day already worked - found testing the owner's pay editor on
+   16 Sep, before it shipped. A day from before db/038 has no rate on it and
+   is worked out the old way. */
+function sentDayPay(row, took){
+  if(row && row.pay_base != null && row.pay_rate != null)
+    return payAt(Number(row.pay_base), Number(row.pay_rate), took);
+  return dayPay(row.seller_id, took, row.market_id);
 }
 const DRIVER_LEG_PAY = 10;    // $10 to drop off, $10 to pick up
 const EXPENSE_KINDS = ["Gas","Ice","Parking","Supplies","Other"];
@@ -2232,7 +2255,7 @@ function dayFromCloud(row, m){
     // Pay, plus whatever they fronted, drove or were given for gas. None of
     // those are sales, so none counts towards commission - they are owed on top.
     // A day sent before db/025 has no travel columns and adds nothing, as before.
-    owed: dayPay(row.seller_id, gross, row.market_id).amount + Number(row.fronted || 0)
+    owed: sentDayPay(row, gross).amount + Number(row.fronted || 0)
           + Number(row.driving_pay || 0) + Number(row.car_gas || 0),
     fronted: Number(row.fronted || 0),
     driving: Number(row.driving_pay || 0),
@@ -2396,6 +2419,10 @@ async function sendDay(){
     }
     S.sentAt = new Date().toISOString();
     S.sendError = null;
+    // The rate the shop wrote on the day, so this screen and Nawid's agree
+    // even if the rate changes before the next market.
+    if(day && day.pay_base != null && day.pay_rate != null)
+      S.payAt = { base: Number(day.pay_base), rate: Number(day.pay_rate) };
     save();
     // A fix asked for before the day got a signal can follow it in now.
     sendFixes().then(() => render());
@@ -3816,7 +3843,8 @@ function scr_result(){
   // The rate of the market this day was worked at. A day carried into the next
   // morning used today's market instead: a seller's Saturday showed Sunday's
   // rate and $24.40 less than the shop owed them.
-  const pay = dayPay(S.me, dayTook, (dayMarket() || MY_MARKET).id);
+  const pay = S.payAt ? payAt(S.payAt.base, S.payAt.rate, dayTook)
+                      : dayPay(S.me, dayTook, (dayMarket() || MY_MARKET).id);
   const commission = pay.amount;
   const carGas = carAllowance();
   const owed = commission + drivePay + fromOwn + carGas;
@@ -4004,7 +4032,7 @@ function liveDay(plan){
              overSend: openedTotal() ? openedTotal()-MY_REC.total : 0,
              fixes: fixesForDay().length,
              packedByOther: (openedTotal() && packedBySomeoneElse()) ? packedByName() : null,
-             owed: closed ? (dayPay(S.me, moneyIn()+expTotal("till"), (dayMarket() || MY_MARKET).id).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
+             owed: closed ? ((S.payAt ? payAt(S.payAt.base, S.payAt.rate, moneyIn()+expTotal("till")) : dayPay(S.me, moneyIn()+expTotal("till"), (dayMarket() || MY_MARKET).id)).amount + driverPay() + expTotal("own") + carAllowance()) : 0 };
   }
   const m = mkt(plan.marketId), s = slr(plan.sellerId);
 
@@ -4449,6 +4477,686 @@ function owner_send(){
   </div>`;
 }
 
+/* ---------------------------------------------------------------
+   The owner's crew: who works here, who has a phone, what they are
+   paid, and which markets they work.
+
+   Every one of these used to be a line of SQL somebody else had to paste
+   into the database on Nawid's behalf. On 15 Sep that bill came due: twelve
+   people on the rota had never typed a code, no screen anywhere said so, and
+   the seller booked on a market the next morning had no way to send his day
+   in. A shop that cannot take on a seller, or take one off, without its
+   developer is not finished.
+
+   Nothing here touches a day. A day that has been sent is locked, and
+   changing the rota only changes who is expected at a market from now on.
+   --------------------------------------------------------------- */
+const CREW = { on:false, people:[], crew:[], phones:[], codes:[], phonesRead:false };
+/* A change to the rota or a pay rate makes the app reload, so every screen is
+   working from the new lists rather than the ones it started with. Without
+   this the owner is thrown back to the top of the list every time they save
+   one thing - so remember who they had open and put them back there. */
+const CREW_OPEN_KEY = "packout.crewopen";
+function crewShowPanel(){
+  const el = document.getElementById("crewPanel");
+  if(el) try{ el.scrollIntoView({ block:"start" }); window.scrollBy(0, -70); }catch(e){}
+}
+let CREW_UI = {
+  /* Only a note left in the last few seconds counts. A save that needed no
+     reload (making a code) leaves the note behind, and it used to pop that
+     person open the next time the app was opened, hours later. */
+  open: (() => { try{
+    const v = JSON.parse(sessionStorage.getItem(CREW_OPEN_KEY) || "null");
+    sessionStorage.removeItem(CREW_OPEN_KEY);
+    return v && v.id && Date.now() - v.at < 15000 ? v.id : null;
+  }catch(e){ return null; } })(),
+  busy:"", err:"", made:null, edits:{}, adding:false, newName:"", deal:null };
+
+function crewCanEdit(){ return !AUTH.demo && AUTH.role === "owner" && !!AUTH.business; }
+
+/* Which phone this is. The sign-in token carries it; the app never stored it,
+   and the owner's list has to be able to say "this one is the phone in your
+   hand" - Nawid has two, and switching off the wrong one is a locked door. */
+function myUserId(){
+  try{
+    const body = (AUTH.token || "").split(".")[1];
+    if(!body) return null;
+    return JSON.parse(atob(body.replace(/-/g, "+").replace(/_/g, "/"))).sub || null;
+  }catch(e){ return null; }
+}
+
+async function loadCrew(){
+  if(!crewCanEdit()) return false;
+  CREW.failed = false;
+  try{
+    const tok = await ensureSession();
+    if(!tok){ CREW.failed = true; return false; }
+    const biz = "?business_id=eq." + encodeURIComponent(AUTH.business);
+    const [p, c, m, e] = await Promise.all([
+      fetch(CLOUD.url + "/rest/v1/people" + biz + "&select=person_id,name,role,base_pay,commission,active&order=name", { headers: cloudHeaders() }),
+      fetch(CLOUD.url + "/rest/v1/market_crew" + biz + "&select=market_id,person_id,sort,base_pay,commission&order=market_id,sort", { headers: cloudHeaders() }),
+      fetch(CLOUD.url + "/rest/v1/memberships" + biz + "&select=user_id,person_id,person_name,role,created_at&order=created_at", { headers: cloudHeaders() }),
+      fetch(CLOUD.url + "/rest/v1/enrolment_codes" + biz + "&used_at=is.null&expires_at=gt." + encodeURIComponent(new Date().toISOString())
+            + "&select=code,person_id,expires_at,used_at&order=expires_at.desc", { headers: cloudHeaders() })
+    ]);
+    if(!p.ok || !c.ok){ CREW.failed = true; return false; }
+    CREW.people = await p.json();
+    CREW.crew   = await c.json();
+    CREW.phones = m.ok ? await m.json() : [];
+    CREW.codes  = e.ok ? await e.json() : [];
+    /* Needs db/036 (run 16 Sep). Guessing from the number of rows - "only my own
+       row means the rule isn't there" - was wrong for an owner who really is
+       the only phone signed in. */
+    CREW.phonesRead = m.ok;
+    CREW.on = true;
+    return true;
+  }catch(x){ CREW.failed = true; return false; }
+}
+
+// One call, with the answer the screen needs: worked, or say why in words.
+/* mustTouch: the change has to land on at least one row. The database's rules
+   don't refuse a change they don't allow - they answer "done" and change
+   nothing. That is how cancelling a leaver's codes reported success while the
+   codes still worked. */
+const CREW_DEAD_CODE = "Your code has stopped working on this phone, so nothing can be changed. It isn't your signal - type a new code.";
+async function crewWrite(method, path, body, mustTouch){
+  const tok = await ensureSession();
+  if(!tok) return { ok:false, msg: AUTH.signinBroken ? CREW_DEAD_CODE : "No signal. Nothing was changed - try again in a moment." };
+  try{
+    const send = () => fetch(CLOUD.url + "/rest/v1/" + path, {
+      method,
+      headers: Object.assign({}, cloudHeaders(), { "Content-Type":"application/json", "Prefer":"return=representation" }),
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+    let r = await send();
+    // An hour-old pass the server wouldn't take - renew once, the way sending a day does.
+    if(r.status === 401){ AUTH.expires = 0; if(await ensureSession()) r = await send(); }
+    if(r.ok){
+      const rows = r.status === 204 ? [] : await r.json().catch(()=>[]);
+      if(mustTouch && Array.isArray(rows) && !rows.length)
+        return { ok:false, msg:"The shop's system didn't take that. Nothing was changed." };
+      return { ok:true, rows };
+    }
+    if(r.status === 401 || r.status === 403)
+      return { ok:false, msg: AUTH.signinBroken ? CREW_DEAD_CODE
+        : "The shop's system wouldn't let this phone change that. This phone may no longer be signed in as an owner. Nothing was changed." };
+    if(r.status === 409)
+      return { ok:false, msg:"That is already there." };
+    return { ok:false, msg:"The shop's system turned it away (" + r.status + "). Nothing was changed." };
+  }catch(e){
+    /* The signal went while the change was on its way. It may have reached the
+       shop and only the answer was lost, so "nothing was changed" could be a
+       lie. The screen is reloaded from the shop after this, so point there. */
+    return { ok:false, unsure:true, msg:"The signal dropped before the shop answered. What you see now is what the shop has - check it before trying again." };
+  }
+}
+
+function crewFirstAt(mid){
+  const at = CREW.crew.filter(x => x.market_id === mid)
+    .sort((a, b) => (Number(a.sort) || 0) - (Number(b.sort) || 0) || String(a.person_id).localeCompare(String(b.person_id)));
+  return at.length ? at[0].person_id : null;
+}
+function crewPayProblem(base, pct){
+  if(base !== null && (!isFinite(base) || base < 0 || base > 2000)) return "A day rate has to be between $0 and $2,000.";
+  if(pct !== null && (!isFinite(pct) || pct < 0 || pct > 100)) return "A percent has to be between 0 and 100.";
+  // 0.22 is how the database keeps 22%, and how a spreadsheet shows it - so it
+  // is an easy thing to type. Saved as typed it pays a quarter of one percent.
+  if(pct !== null && pct > 0 && pct < 1) return "Type the percent as a whole number: 22 for 22%. " + pct + " would pay less than 1%.";
+  return "";
+}
+const crewPerson  = pid => CREW.people.find(x => x.person_id === pid);
+const crewPhones  = pid => CREW.phones.filter(x => x.person_id === pid);
+const crewMarkets = pid => CREW.crew.filter(x => x.person_id === pid);
+const crewOpenCodes = pid => CREW.codes.filter(x => x.person_id === pid && !x.used_at && new Date(x.expires_at) > new Date());
+const crewOpenCode = pid => crewOpenCodes(pid)[0];
+const crewPct  = v => (v == null ? null : Math.round(Number(v) * 1000) / 10);
+const crewWhen = iso => { try{ return fmtShort(new Date(iso)); }catch(e){ return ""; } };
+
+/* After any change the phone's own saved lists are stale - the owner's pay
+   figures and market names come from them. refreshCatalogue() reloads the app
+   only when nothing is being worked, so this can never move a day. */
+async function crewReload(){
+  const fresh = await loadCrew();
+  try{ sessionStorage.setItem(CREW_OPEN_KEY, JSON.stringify({ id: CREW_UI.open, at: Date.now() })); }catch(e){}
+  if(fresh){ try{ await refreshCatalogue(); }catch(e){} }   // this may reload the app
+  render();
+  return fresh;
+}
+
+/* The lock is held until the screen is showing what the shop now has. Letting
+   go before the reload let a second tap act on the old list - a second Add
+   them tried to add the same person again and said "That is already there".
+   A failed or half-done change reloads too, so the screen never shows a list
+   the shop doesn't have. */
+async function crewDo(busyKey, fn){
+  CREW_UI.busy = busyKey; CREW_UI.err = ""; render();
+  let res;
+  try{ res = await fn(); }catch(e){ res = { ok:false, unsure:true, msg:"Something went wrong part way. What you see now is what the shop has." }; }
+  const ok = !!(res && res.ok);
+  if(!ok) CREW_UI.err = (res && res.msg) || "Nothing was changed.";
+  if(ok || (res && (res.unsure || res.partial))){
+    const fresh = await crewReload();
+    // Couldn't even check: the list on screen is the old one, so say that.
+    if(!fresh) CREW_UI.err = ok
+      ? "Saved - but the list couldn't be refreshed, so it may look out of date. Try again when you have signal."
+      : "No signal. It may or may not have gone in, and the list couldn't be checked. Look again when you have signal before trying it again.";
+  }
+  CREW_UI.busy = "";
+  render();
+  return ok;
+}
+
+// ---- the screen ----------------------------------------------------------
+
+function crewBlock(){
+  if(!crewCanEdit()) return "";
+  if(AUTH.signinBroken) return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">Your code has stopped working</div>
+      <p class="note">This phone can't reach your crew or change anything until a new code is typed in. <b>It isn't your signal.</b></p>
+      <button class="btn" data-act="resignin">Type a new code</button>
+    </div>`;
+  if(!CREW.on) return `<div class="card card-pad stack-sm">
+      <div class="lbl">Your crew</div>
+      <p class="note">${CREW.failed
+        ? "Couldn't get your crew from the shop. It's usually signal - try again in a moment."
+        : "Loading who works here…"}</p>
+      <button class="btn btn-quiet btn-sm" data-act="crew-retry">Try again</button>
+    </div>`;
+
+  const here = CREW.people.filter(x => x.active !== false);
+  const gone = CREW.people.filter(x => x.active === false);
+  const withPhone = here.filter(x => crewPhones(x.person_id).length).length;
+  const noPhone = here.filter(x => !crewPhones(x.person_id).length && crewMarkets(x.person_id).length);
+
+  const row = p => {
+    const phones = crewPhones(p.person_id), mk = crewMarkets(p.person_id);
+    const code = crewOpenCode(p.person_id);
+    /* With no way to read phones (db/036 not run) the app knows nothing about
+       them, and "No phone" would be a guess dressed as a fact. Say nothing. */
+    const tag = !CREW.phonesRead ? (code ? `<span class="pill">Code waiting</span>` : "")
+      : phones.length
+      ? `<span class="pill pill-good">${phones.length > 1 ? phones.length + " phones" : "Phone on"}</span>`
+      : code ? `<span class="pill">Code waiting</span>`
+      : `<span class="pill pill-warn">No phone</span>`;
+    return `<button class="crewrow" data-act="crew-open:${esc(p.person_id)}">
+      <span class="crewrow-l">
+        <span class="who">${esc(p.name)}</span>
+        <span class="sub">${mk.length ? mk.length + (mk.length === 1 ? " market" : " markets") : "No markets"}${p.role === "owner" ? " · owner" : ""}</span>
+      </span>
+      ${tag}
+    </button>`;
+  };
+
+  // An error from something outside a person's panel (another phone switched
+  // off, a retry) had nowhere to show and was simply lost.
+  const looseErr = CREW_UI.err && !CREW_UI.open && !CREW_UI.adding
+    ? `<div class="card-pad" style="padding-bottom:0"><div class="card card-pad stripe stripe-warn"><p class="note">${esc(CREW_UI.err)}</p></div></div>` : "";
+  return `<div class="card">
+    ${looseErr}
+    <div class="card-hd">
+      <div><h3>Your crew</h3><div class="sub" style="margin-top:3px">${here.length} working here${CREW.phonesRead ? " · " + withPhone + " with the app on their phone" : ""}</div></div>
+    </div>
+    ${!CREW.phonesRead ? `<div class="card-pad" style="padding-bottom:0"><p class="note">Phones can't be listed yet — the database change for it hasn't been run.</p></div>` : ""}
+    ${noPhone.length && CREW.phonesRead ? `<div class="card-pad" style="padding-bottom:0">
+      <div class="card card-pad stripe stripe-warn stack-sm">
+        <div class="lbl">${noPhone.length} ${noPhone.length === 1 ? "person is" : "people are"} on the rota with no app</div>
+        <p class="note">They can't send a day in until they type a code. Tap a name below and tap <b>Make a code</b>.</p>
+      </div>
+    </div>` : ""}
+    <div class="crewlist">${here.map(row).join("")}</div>
+    ${(() => {
+      /* A phone signed in under a name that isn't on the list - a checking
+         phone, or one from an old code - showed up nowhere, so nobody could see
+         it or switch it off. Whoever it is, it can see what its role allows. */
+      const known = new Set(CREW.people.map(x => x.person_id));
+      const strays = CREW.phonesRead ? CREW.phones.filter(f => !known.has(f.person_id)) : [];
+      if(!strays.length) return "";
+      const mine = myUserId();
+      return `<div class="card-pad stack-sm" style="border-top:1px solid var(--line)">
+        <div class="lbl">Other phones signed in</div>
+        <p class="note">Signed in under a name that isn't on your list. If you don't know what one is, switch it off.</p>
+        ${strays.map(f => `<div class="kv">
+          <span class="kv-k">${esc(f.person_name || f.person_id || "No name")}<span class="sub"> — ${f.role === "owner" ? "owner, sees everything" : "seller"} · since ${esc(crewWhen(f.created_at))}</span></span>
+          <span class="kv-v">${f.user_id === mine ? `<span class="sub">this phone</span>`
+            : `<button class="btn btn-quiet btn-sm" data-act="crew-phoneoff:${esc(f.user_id)}">${CREW_UI.busy === "off:" + f.user_id ? "Switching off…" : "Switch off"}</button>`}</span>
+        </div>`).join("")}
+      </div>`;
+    })()}
+    ${CREW_UI.adding ? `<div class="card-pad stack-sm" style="border-top:1px solid var(--line)">
+        <div class="lbl">Who is joining?</div>
+        <input class="inp" type="text" placeholder="Their name" data-crew="new" value="${esc(CREW_UI.newName)}">
+        <div class="row" style="gap:8px">
+          <button class="btn btn-sm" data-act="crew-addsave">${CREW_UI.busy === "add" ? "Adding…" : "Add them"}</button>
+          <button class="btn btn-quiet btn-sm" data-act="crew-addcancel">Cancel</button>
+        </div>
+        ${CREW_UI.err ? `<p class="note">${esc(CREW_UI.err)}</p>` : ""}
+      </div>`
+    : `<div class="card-pad" style="border-top:1px solid var(--line)">
+        <button class="btn btn-quiet btn-sm" data-act="crew-add">Add someone</button>
+      </div>`}
+    ${gone.length ? `<div class="card-pad" style="border-top:1px solid var(--line)">
+      <div class="lbl">No longer working here</div>
+      <div class="crewlist">${gone.map(p => `<button class="crewrow" data-act="crew-open:${esc(p.person_id)}">
+        <span class="crewrow-l"><span class="who">${esc(p.name)}</span><span class="sub">Their days stay in the books</span></span>
+        <span class="pill">Left</span>
+      </button>`).join("")}</div>
+    </div>` : ""}
+  </div>
+  ${CREW_UI.open ? crewPanel(CREW_UI.open) : ""}`;
+}
+
+function crewPanel(pid){
+  const p = crewPerson(pid);
+  if(!p) return "";
+  const phones = crewPhones(pid), mine = myUserId();
+  const code = crewOpenCode(pid);
+  const mk = crewMarkets(pid).slice().sort((a, b) => String(a.market_id).localeCompare(String(b.market_id)));
+  const ed = CREW_UI.edits[pid] || {};
+  const basePay = ed.base !== undefined ? ed.base : (p.base_pay == null ? "" : String(Number(p.base_pay)));
+  const pct = ed.rate !== undefined ? ed.rate : (p.commission == null ? "" : String(crewPct(p.commission)));
+  const busy = CREW_UI.busy;
+
+  const waiting = crewOpenCodes(pid);
+  const waitingCodes = !waiting.length ? "" : `<p class="note">${
+      waiting.length === 1
+        ? `${phones.length ? "A code is also" : "A code is"} waiting to be typed: <b>${esc(waiting[0].code)}</b>. It works until ${esc(crewWhen(waiting[0].expires_at))}.`
+        : `${waiting.length} codes are waiting to be typed: <b>${waiting.map(c => esc(c.code)).join(", ")}</b>. Any one of them signs a phone in.`
+    }</p>
+    <button class="btn btn-quiet btn-sm" data-act="crew-cancelcodes:${esc(pid)}">${busy === "cancel:" + pid ? "Cancelling…" : waiting.length === 1 ? "Cancel that code" : "Cancel all " + waiting.length}</button>`;
+  const phoneLines = phones.map(f => `<div class="kv">
+      <span class="kv-k">${f.user_id === mine ? "This phone" : "Signed in " + esc(crewWhen(f.created_at))}<span class="sub"> — ${esc(f.role === "owner" ? "owner" : "seller")}</span></span>
+      <span class="kv-v">${f.user_id === mine
+        ? `<span class="sub">can't switch off the one you're holding</span>`
+        : `<button class="btn btn-quiet btn-sm" data-act="crew-phoneoff:${esc(f.user_id)}">${busy === "off:" + f.user_id ? "Switching off…" : "Switch off"}</button>`}</span>
+    </div>`).join("");
+
+  // Their usual deal, as the app pays it when a market has no deal of its own.
+  const usualBase = p.base_pay == null ? BASE_PAY_DEFAULT : Number(p.base_pay);
+  const usualRate = p.commission == null ? COMMISSION : Number(p.commission);
+  const onMarkets = mk.map(c => {
+    const m = mkt(c.market_id);
+    const key = pid + "|" + c.market_id;
+    const shared = CREW.crew.filter(x => x.market_id === c.market_id).length > 1;
+    /* First is whoever is at the top of that stall's list - the lowest number,
+       then by id, the same order the phones load it in. It used to mean "has
+       the number 0", so taking the first person off left 1 and 2 behind and
+       the screen showed nobody first while every phone treated 1 as first. */
+    const first = shared && crewFirstAt(c.market_id) === pid;
+    /* A market can have its own deal (one seller: $220 or 22% at Alameda, $120
+       or 20% at Montclair). It wins over their usual, so it has to be on the
+       screen - changing the usual rate above doesn't touch it. */
+    const hasDeal = c.base_pay != null || c.commission != null;
+    const effBase = c.base_pay != null ? Number(c.base_pay) : usualBase;
+    const effRate = c.commission != null ? Number(c.commission) : usualRate;
+    const editing = CREW_UI.deal === key;
+    const ed = CREW_UI.edits[key] || {};
+    const dBase = ed.base !== undefined ? ed.base : (c.base_pay == null ? "" : String(Number(c.base_pay)));
+    const dRate = ed.rate !== undefined ? ed.rate : (c.commission == null ? "" : String(crewPct(c.commission)));
+    return `<div class="crewmkt">
+      <div class="kv">
+        <span class="kv-k">${esc(m ? m.name : c.market_id)}<span class="sub"> — ${esc(m ? DAY_FULL[m.day] + "s" : "")}${first ? " · first on the stall" : ""}</span></span>
+        <span class="kv-v" style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          ${shared && !first
+            ? `<button class="btn btn-quiet btn-sm" data-act="crew-first:${esc(key)}">${busy === "first:" + key ? "…" : "Make first"}</button>` : ""}
+          <button class="btn btn-quiet btn-sm" data-act="crew-rmmarket:${esc(key)}">${busy === "rm:" + key ? "…" : "Take off"}</button>
+        </span>
+      </div>
+      <div class="row" style="gap:8px;align-items:center;justify-content:space-between">
+        <span class="sub">${hasDeal ? `Their own deal here: <b>${money(effBase)}</b> a day or <b>${crewPct(effRate)}%</b>` : `Their usual pay`}</span>
+        ${editing ? "" : `<button class="btn btn-quiet btn-sm" data-act="crew-deal:${esc(key)}">${hasDeal ? "Change deal" : "Set a deal here"}</button>`}
+      </div>
+      ${editing ? `<div class="stack-sm" style="margin-top:8px">
+        <div class="row" style="gap:12px;align-items:flex-end">
+          <div><div class="lbl">Day rate here</div><input class="inp inp-sm" type="number" inputmode="decimal" placeholder="${usualBase}" data-crew="dbase:${esc(key)}" value="${esc(dBase)}"></div>
+          <div><div class="lbl">Percent here</div><input class="inp inp-sm" type="number" inputmode="decimal" placeholder="${crewPct(usualRate)}" data-crew="drate:${esc(key)}" value="${esc(dRate)}"></div>
+        </div>
+        <p class="note">Left blank, that part is their usual — ${money(usualBase)} and ${crewPct(usualRate)}%.</p>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" data-act="crew-dealsave:${esc(key)}">${busy === "deal:" + key ? "Saving…" : "Save deal"}</button>
+          ${hasDeal ? `<button class="btn btn-quiet btn-sm" data-act="crew-dealclear:${esc(key)}">${busy === "dealclear:" + key ? "…" : "Pay their usual here"}</button>` : ""}
+          <button class="btn btn-quiet btn-sm" data-act="crew-dealcancel">Cancel</button>
+        </div>
+      </div>` : ""}
+    </div>`;
+  }).join("") || `<p class="note">Not on any market yet.</p>`;
+
+  const canAdd = MARKETS.filter(m => !mk.some(c => c.market_id === m.id))
+    .slice().sort((a, b) => DAYS.indexOf(a.day) - DAYS.indexOf(b.day) || a.name.localeCompare(b.name));
+
+  return `<div class="card stripe stripe-live" id="crewPanel">
+    <div class="card-hd">
+      <div><h3>${esc(p.name)}</h3><div class="sub" style="margin-top:3px">${p.active === false ? "No longer working here" : p.role === "owner" ? "Owner" : "Seller"}</div></div>
+      <button class="btn btn-quiet btn-sm" data-act="crew-close">Close</button>
+    </div>
+
+    ${CREW_UI.err ? `<div class="card-pad" style="padding-bottom:0"><div class="card card-pad stripe stripe-warn"><p class="note">${esc(CREW_UI.err)}</p></div></div>` : ""}
+
+    ${CREW_UI.made && CREW_UI.made.person === pid ? `<div class="card-pad" style="padding-bottom:0">
+      <div class="card card-pad stack-sm stripe stripe-good">
+        <div class="lbl">Their code — text it to them</div>
+        <div class="bigcode">${esc(CREW_UI.made.code)}</div>
+        <p class="note">It works once, on the first phone that types it, and dies in 7 days. <b>Don't type it yourself to check it</b> — that uses it up.</p>
+        ${CREW_UI.made.role === "owner" ? `<p class="note"><b>This is an owner's code.</b> Whoever types it sees every market, every day and everybody's pay, and can make codes and switch phones off. Only give it to a phone of your own.</p>` : ""}
+        <button class="btn btn-quiet btn-sm" data-act="crew-copy:${esc(CREW_UI.made.code)}">${CREW_UI.busy === "copied" ? "Copied" : "Copy the code"}</button>
+      </div>
+    </div>` : ""}
+
+    <div class="card-pad stack-sm" style="border-top:1px solid var(--line)">
+      <div class="lbl">Their phone</div>
+      ${!CREW.phonesRead ? `<p class="note">Phones can't be listed yet — the database change for it hasn't been run.</p>`
+        : phones.length ? phoneLines + (code ? waitingCodes : "")
+        : code ? waitingCodes
+        : `<p class="note">No phone. They can't send a day in until they type a code.</p>`}
+      ${p.active === false ? "" : `<button class="btn btn-quiet btn-sm" data-act="crew-code:${esc(pid)}">${busy === "code:" + pid ? "Making it…" : phones.length ? "Make another code" : "Make a code"}</button>`}
+    </div>
+
+    <div class="card-pad stack-sm" style="border-top:1px solid var(--line)">
+      <div class="lbl">What they're paid</div>
+      <p class="note">Whichever is more, per day: the day rate, or the % of what they take.</p>
+      <div class="row" style="gap:12px;align-items:flex-end">
+        <div><div class="lbl">Day rate</div><input class="inp inp-sm" type="number" inputmode="decimal" placeholder="${BASE_PAY_DEFAULT}" data-crew="base:${esc(pid)}" value="${esc(basePay)}"></div>
+        <div><div class="lbl">Percent</div><input class="inp inp-sm" type="number" inputmode="decimal" placeholder="${crewPct(COMMISSION)}" data-crew="rate:${esc(pid)}" value="${esc(pct)}"></div>
+      </div>
+      <p class="note">Left blank they get the shop's usual — ${money(BASE_PAY_DEFAULT)} and ${crewPct(COMMISSION)}%.</p>
+      <button class="btn btn-sm" data-act="crew-paysave:${esc(pid)}">${busy === "pay:" + pid ? "Saving…" : "Save their pay"}</button>
+    </div>
+
+    <div class="card-pad stack-sm" style="border-top:1px solid var(--line)">
+      <div class="lbl">Markets they work</div>
+      ${onMarkets}
+      ${p.active === false ? "" : `<div class="row" style="gap:8px;align-items:center">
+        <select class="inp inp-sm" data-crew="add:${esc(pid)}">
+          <option value="">Add a market…</option>
+          ${canAdd.map(m => `<option value="${esc(m.id)}">${esc(m.name)} — ${esc(DAY_FULL[m.day])}s</option>`).join("")}
+        </select>
+        <button class="btn btn-quiet btn-sm" data-act="crew-addmarket:${esc(pid)}">${busy === "addm:" + pid ? "Adding…" : "Add"}</button>
+      </div>`}
+      <p class="note">Changing this changes who is expected from now on. Days already sent are untouched.</p>
+    </div>
+
+    <div class="card-pad" style="border-top:1px solid var(--line)">
+      ${p.active === false
+        ? `<button class="btn btn-quiet btn-sm" data-act="crew-back:${esc(pid)}">${busy === "back:" + pid ? "…" : "They're working here again"}</button>`
+        : p.person_id === AUTH.person
+          ? `<p class="note">This is you.</p>`
+        /* One tap here switches off every phone the owner has. From another
+           owner's phone that locks the owner of the business out of it. A lost
+           owner's phone is switched off on its own, above. */
+        : p.role === "owner"
+          ? `<p class="note">An owner can't be marked as left from here. To stop one of their phones, switch that phone off above.</p>`
+          : `<button class="btn btn-quiet btn-sm" data-act="crew-left:${esc(pid)}">${busy === "left:" + pid ? "…" : "They've left"}</button>
+             <p class="note" style="margin-top:6px">Takes them off every market, switches their phones off and cancels any code they haven't used. Everything they already sent stays in the books. A day still on their phone can't be sent after this - if they might have one, ask them to send it first.</p>`}
+    </div>
+  </div>`;
+}
+
+// ---- what the buttons do -------------------------------------------------
+
+function crewInput(el){
+  const k = el.dataset.crew;
+  if(!k) return false;
+  if(k === "new"){ CREW_UI.newName = el.value; return true; }
+  const [what, pid] = k.split(":");
+  if(what === "base" || what === "rate"){
+    CREW_UI.edits[pid] = Object.assign({}, CREW_UI.edits[pid], { [what]: el.value });
+    return true;
+  }
+  if(what === "dbase" || what === "drate"){          // pid here is "person|market"
+    const f = what === "dbase" ? "base" : "rate";
+    CREW_UI.edits[pid] = Object.assign({}, CREW_UI.edits[pid], { [f]: el.value });
+    return true;
+  }
+  return true;                       // the market picker is read at the tap
+}
+
+/* One thing at a time. A double tap on Make a code made two working codes and
+   showed only one - the other was a live way in that nobody knew about. While
+   anything is on its way to the shop, every other tap that changes something
+   is ignored. Opening, closing and copying still work. The claim is let go
+   however the tap ends - a Cancel, a box left empty, an error - so a button
+   can never be left dead. */
+async function crewTap(act){
+  if(!act || act.indexOf("crew-") !== 0) return false;
+  const name = act.slice(5).split(":")[0], arg = act.slice(5).split(":").slice(1).join(":");
+  const quiet = ["retry","close","open","add","addcancel","copy","deal","dealcancel"];
+  if(quiet.indexOf(name) >= 0) return crewTapNow(name, arg);
+  if(CREW_UI.busy && CREW_UI.busy !== "copied") return true;
+  const claim = "wait:" + name;
+  CREW_UI.busy = claim;                      // claimed now, before anything waits
+  try{ return await crewTapNow(name, arg); }
+  finally{ if(CREW_UI.busy === claim) CREW_UI.busy = ""; }
+}
+
+async function crewTapNow(name, arg){
+  if(name === "retry"){ CREW_UI.err = ""; render(); loadCrew().then(render); return true; }
+  /* Pay typed and never saved is dropped when the panel closes. It used to
+     stay, and opening the person again showed $175 in the box while the shop
+     still had $150 - a rate that looked saved and wasn't. */
+  if(name === "close"){ CREW_UI.open = null; CREW_UI.err = ""; CREW_UI.made = null; CREW_UI.edits = {}; CREW_UI.deal = null; render(); return true; }
+  if(name === "open"){
+    CREW_UI.open = CREW_UI.open === arg ? null : arg;
+    CREW_UI.err = ""; CREW_UI.made = null; CREW_UI.edits = {}; CREW_UI.deal = null; render();
+    if(CREW_UI.open) crewShowPanel();
+    return true;
+  }
+  if(name === "add"){ CREW_UI.adding = true; CREW_UI.err = ""; render(); return true; }
+  if(name === "addcancel"){ CREW_UI.adding = false; CREW_UI.newName = ""; CREW_UI.err = ""; render(); return true; }
+
+  if(name === "copy"){
+    try{ await navigator.clipboard.writeText(arg); CREW_UI.busy = "copied"; render();
+         setTimeout(()=>{ if(CREW_UI.busy === "copied"){ CREW_UI.busy = ""; render(); } }, 1500); }
+    catch(e){ CREW_UI.err = "This phone wouldn't copy it. Press and hold the code to copy it instead."; render(); }
+    return true;
+  }
+
+  if(name === "addsave"){
+    const nm = CREW_UI.newName.trim().replace(/\s+/g, " ");
+    if(nm.length < 2){ CREW_UI.err = "Type their name first."; render(); return true; }
+    /* The name is shown as typed; the id behind it only has to be unique.
+       "José" used to become "jos", and a name in another alphabet was refused
+       outright - a real person turned away by a screen. */
+    let base = nm.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z]/g, "")
+            || ("person" + Date.now().toString(36));
+    const same = CREW.people.filter(x => x.active !== false && x.name.trim().toLowerCase() === nm.toLowerCase());
+    if(same.length && !confirm("Someone called " + same[0].name + " already works here.\n\nAdd a second " + same[0].name + "? Every screen will show the same name for both - adding a surname or initial keeps them apart.")) return true;
+    let pid = base, n = 2;
+    while(CREW.people.some(x => x.person_id === pid)) pid = base + (n++);
+    const was = CREW_UI.open;
+    CREW_UI.open = pid;
+    const ok = await crewDo("add", () => crewWrite("POST", "people", {
+      business_id: AUTH.business, person_id: pid, name: nm, role: "seller", commission: COMMISSION, active: true
+    }, true));
+    if(ok){ CREW_UI.adding = false; CREW_UI.newName = ""; }
+    else CREW_UI.open = was;
+    render();
+    return true;
+  }
+
+  if(name === "code"){
+    /* A code already waiting is cancelled first. Making another alongside it
+       left two working ways in for one person - and the old one, already sent
+       somewhere, is exactly the one nobody is watching. */
+    const waiting = crewOpenCodes(arg);
+    const who = (crewPerson(arg) || {}).name || arg, many = waiting.length > 1;
+    if(waiting.length && !confirm((many ? waiting.length + " codes are" : "A code is") + " already waiting for " + who + " (" + waiting.map(c => c.code).join(", ") + ").\n\n"
+      + "Make a new one? " + (many ? "The waiting ones stop" : "The waiting one stops") + " working, so if you've already sent " + (many ? "one" : "it") + ", send the new one instead.")) return true;
+    CREW_UI.busy = "code:" + arg; CREW_UI.err = ""; CREW_UI.made = null; render();
+    const tok = await ensureSession();
+    if(!tok){ CREW_UI.busy = ""; CREW_UI.err = AUTH.signinBroken ? CREW_DEAD_CODE : "No signal. No code was made - try again in a moment."; render(); return true; }
+    if(waiting.length){
+      const c = await crewWrite("POST", "rpc/cancel_codes", { p_business: AUTH.business, p_person: arg });
+      if(!c.ok){
+        CREW_UI.busy = "";
+        CREW_UI.err = "The waiting code couldn't be cancelled, so no new code was made. " + c.msg;
+        await crewReload(); render(); return true;
+      }
+    }
+    try{
+      /* make_code_for is told which business (db/039). make_code picks the
+         first owner sign-in it finds, so on a phone that is an owner of the
+         sandbox too, a real seller's code could land in Test Kitchen. */
+      const r = await fetch(CLOUD.url + "/rest/v1/rpc/make_code_for", {
+        method:"POST",
+        headers: Object.assign({}, cloudHeaders(), { "Content-Type":"application/json" }),
+        body: JSON.stringify({ p_business: AUTH.business, p_person: arg, p_days: 7 })
+      });
+      if(!r.ok) CREW_UI.err = "The shop's system wouldn't make a code (" + r.status + "). No code was made.";
+      else {
+        const code = await r.json();
+        CREW_UI.made = { person: arg, code: String(code).replace(/^"|"$/g, ""), role: (crewPerson(arg) || {}).role };
+      }
+    }catch(e){
+      // The code may have been made and only the answer lost. If it was, it
+      // shows under Their phone as a code waiting to be typed.
+      CREW_UI.err = "The signal dropped before the shop answered. If a code was made it shows below as waiting to be typed - check before making another.";
+    }
+    const fresh = await crewReload();
+    if(!fresh && !CREW_UI.made) CREW_UI.err = "No signal. A code may or may not have been made, and the list couldn't be checked. Look again when you have signal before making another.";
+    CREW_UI.busy = ""; render();
+    return true;
+  }
+
+  if(name === "cancelcodes"){
+    const nm = (crewPerson(arg) || {}).name || arg;
+    const n = crewOpenCodes(arg).length;
+    if(!confirm((n > 1 ? "Cancel all " + n + " of " + nm + "'s codes?" : "Cancel " + nm + "'s code?")
+      + "\n\nIt stops working straight away. A phone that already signed in with a code stays signed in.")) return true;
+    await crewDo("cancel:" + arg, async () => {
+      const r = await crewWrite("POST", "rpc/cancel_codes", { p_business: AUTH.business, p_person: arg });
+      if(r.ok && Number(r.rows) === 0) return { ok:false, unsure:true, msg:"There was no code left to cancel - it may already have been typed or run out." };
+      return r;
+    });
+    return true;
+  }
+
+  if(name === "phoneoff"){
+    const who = CREW.phones.find(x => x.user_id === arg);
+    const nm = who ? (who.person_name || who.person_id) : "this phone";
+    /* Checked on 16 Sep: a phone switched off with a counted day on it keeps
+       the day, and the seller is told their code stopped working. The day goes
+       in by itself once they type a new code - so say that here, or a mistaken
+       switch-off looks like a lost day. */
+    if(!confirm("Switch " + nm + "'s phone off?\n\nIt stops being able to send days straight away. A day already on that phone and not sent yet stays on the phone - it goes in by itself if you give them a new code. Everything already sent stays as it is.")) return true;
+    await crewDo("off:" + arg, () => crewWrite("DELETE",
+      "memberships?user_id=eq." + encodeURIComponent(arg) + "&business_id=eq." + encodeURIComponent(AUTH.business)));
+    return true;
+  }
+
+  if(name === "paysave"){
+    const ed = CREW_UI.edits[arg] || {};
+    const p = crewPerson(arg); if(!p) return true;
+    const rawBase = ed.base !== undefined ? ed.base : (p.base_pay == null ? "" : String(Number(p.base_pay)));
+    const rawPct  = ed.rate !== undefined ? ed.rate : (p.commission == null ? "" : String(crewPct(p.commission)));
+    const base = String(rawBase).trim() === "" ? null : Number(rawBase);
+    const pct  = String(rawPct).trim()  === "" ? null : Number(rawPct);
+    const bad = crewPayProblem(base, pct);
+    if(bad){ CREW_UI.err = bad; render(); return true; }
+    const ok = await crewDo("pay:" + arg, () => crewWrite("PATCH",
+      "people?person_id=eq." + encodeURIComponent(arg) + "&business_id=eq." + encodeURIComponent(AUTH.business),
+      { base_pay: base, commission: pct === null ? COMMISSION : Math.round(pct * 100) / 10000 }, true));
+    if(ok) delete CREW_UI.edits[arg];
+    return true;
+  }
+
+  if(name === "deal"){ CREW_UI.deal = arg; delete CREW_UI.edits[arg]; CREW_UI.err = ""; render(); return true; }
+  if(name === "dealcancel"){ if(CREW_UI.deal) delete CREW_UI.edits[CREW_UI.deal]; CREW_UI.deal = null; CREW_UI.err = ""; render(); return true; }
+
+  if(name === "dealsave" || name === "dealclear"){
+    const [pid, mid] = arg.split("|");
+    const row = CREW.crew.find(x => x.person_id === pid && x.market_id === mid);
+    if(!row) return true;
+    let base = null, pct = null;
+    if(name === "dealsave"){
+      const ed = CREW_UI.edits[arg] || {};
+      const rawBase = ed.base !== undefined ? ed.base : (row.base_pay == null ? "" : String(Number(row.base_pay)));
+      const rawPct  = ed.rate !== undefined ? ed.rate : (row.commission == null ? "" : String(crewPct(row.commission)));
+      base = String(rawBase).trim() === "" ? null : Number(rawBase);
+      pct  = String(rawPct).trim()  === "" ? null : Number(rawPct);
+      const bad = crewPayProblem(base, pct);
+      if(bad){ CREW_UI.err = bad; render(); return true; }
+    }
+    const ok = await crewDo((name === "dealsave" ? "deal:" : "dealclear:") + arg, () => crewWrite("PATCH",
+      "market_crew?person_id=eq." + encodeURIComponent(pid) + "&market_id=eq." + encodeURIComponent(mid)
+      + "&business_id=eq." + encodeURIComponent(AUTH.business),
+      { base_pay: base, commission: pct === null ? null : Math.round(pct * 100) / 10000 }, true));
+    if(ok){ delete CREW_UI.edits[arg]; CREW_UI.deal = null; render(); }
+    return true;
+  }
+
+  if(name === "addmarket"){
+    const sel = document.querySelector('[data-crew="add:' + arg + '"]');
+    const mid = sel ? sel.value : "";
+    if(!mid){ CREW_UI.err = "Pick a market first."; render(); return true; }
+    const at = CREW.crew.filter(x => x.market_id === mid);
+    const sort = at.length ? Math.max.apply(null, at.map(x => Number(x.sort) || 0)) + 1 : 0;
+    await crewDo("addm:" + arg, () => crewWrite("POST", "market_crew",
+      { business_id: AUTH.business, market_id: mid, person_id: arg, sort }, true));
+    return true;
+  }
+
+  if(name === "rmmarket"){
+    const [pid, mid] = arg.split("|");
+    const m = mkt(mid);
+    if(!confirm("Take " + ((crewPerson(pid) || {}).name || pid) + " off " + (m ? m.name : mid) + "?\n\nNobody is put in their place. Days already sent are untouched.")) return true;
+    await crewDo("rm:" + pid + "|" + mid, () => crewWrite("DELETE",
+      "market_crew?person_id=eq." + encodeURIComponent(pid) + "&market_id=eq." + encodeURIComponent(mid)
+      + "&business_id=eq." + encodeURIComponent(AUTH.business)));
+    return true;
+  }
+
+  if(name === "first"){
+    const [pid, mid] = arg.split("|");
+    const at = CREW.crew.filter(x => x.market_id === mid);
+    const order = [pid].concat(at.map(x => x.person_id).filter(x => x !== pid));
+    await crewDo("first:" + pid + "|" + mid, async () => {
+      for(let i = 0; i < order.length; i++){
+        const r = await crewWrite("PATCH",
+          "market_crew?person_id=eq." + encodeURIComponent(order[i]) + "&market_id=eq." + encodeURIComponent(mid)
+          + "&business_id=eq." + encodeURIComponent(AUTH.business), { sort: i }, true);
+        if(!r.ok) return i === 0 && !r.unsure ? r
+          : { ok:false, partial:true, msg:"Only part of the new order went in. What you see now is what the shop has - tap Make first again to finish." };
+      }
+      return { ok:true };
+    });
+    return true;
+  }
+
+  if(name === "left"){
+    const p = crewPerson(arg); if(!p || p.role === "owner" || p.person_id === AUTH.person) return true;
+    if(!confirm(p.name + " has left?\n\nThey come off every market, their phones stop working and any unused code is cancelled. Every day they already sent stays in the books exactly as it is.\n\nA day still on their phone and not sent can't be sent after this. If they might have one, ask them to send it first.")) return true;
+    const biz = "&business_id=eq." + encodeURIComponent(AUTH.business);
+    await crewDo("left:" + arg, async () => {
+      /* Four changes, one after another. If one fails the earlier ones have
+         already happened, so "nothing was changed" would be untrue - and a
+         phone left switched on after "They've left" is a leaver who can still
+         send days. Codes and phones go first: the part that matters most. */
+      const steps = [
+        () => crewWrite("POST", "rpc/cancel_codes", { p_business: AUTH.business, p_person: arg }),
+        () => crewWrite("DELETE", "memberships?person_id=eq." + encodeURIComponent(arg) + biz),
+        () => crewWrite("DELETE", "market_crew?person_id=eq." + encodeURIComponent(arg) + biz),
+        () => crewWrite("PATCH", "people?person_id=eq." + encodeURIComponent(arg) + biz, { active:false }, true)
+      ];
+      for(let i = 0; i < steps.length; i++){
+        const r = await steps[i]();
+        if(!r.ok) return i === 0 && !r.unsure ? r
+          : { ok:false, partial:true, msg:"Only part of that went in - the signal or the shop stopped it half way. What you see now is what the shop has. Tap They've left again to finish." };
+      }
+      return { ok:true };
+    });
+    return true;
+  }
+
+  if(name === "back"){
+    await crewDo("back:" + arg, () => crewWrite("PATCH",
+      "people?person_id=eq." + encodeURIComponent(arg) + "&business_id=eq." + encodeURIComponent(AUTH.business),
+      { active:true }, true));
+    return true;
+  }
+  return false;
+}
+
+document.addEventListener("input", e => { if(e.target && e.target.dataset && e.target.dataset.crew) crewInput(e.target); });
+
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
@@ -4479,6 +5187,7 @@ function owner_people(){
       <h1 class="page">People</h1>
       <p class="note" style="margin-top:5px">Each person is measured against what that market normally does \u2014 not against each other. A big market doesn't make you a better seller.</p>
     </div>
+    ${crewBlock()}
     <div class="card card-pad stripe stripe-warn">
       <div class="lbl">Sample figures</div>
       <p class="note" style="margin-top:6px">Every number on this screen is worked from made-up days,
@@ -4769,6 +5478,9 @@ document.addEventListener("click", e => {
 
   const t = e.target.closest("button");
   if(!t) return;
+  // The owner's crew screen. Every one of these talks to the shop, so they
+  // answer later; the button says what it is doing in the meantime.
+  if(t.dataset.act && t.dataset.act.indexOf("crew-") === 0){ crewTap(t.dataset.act); return; }
   if(t.dataset.act==="test-reset"){
     if(!TEST_MODE) return;
     if(!confirm("Wipe every test day and start again?\n\nOnly touches Test Kitchen. Real days are not affected.")) return;
@@ -4783,6 +5495,7 @@ document.addEventListener("click", e => {
     if(!canSeeOwner()) return;
     S.mode="owner"; render();
     loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
+    if(S.tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
     return;
   }
 
@@ -4790,6 +5503,7 @@ document.addEventListener("click", e => {
   if(tab && canSeeOwner()){
     S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
     if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
+    if(tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
     return;
   }
 
@@ -5241,7 +5955,10 @@ verifySent();
 /* A day that never made it off the phone goes again on its own - on
    load, and the moment the phone says it is back online. The seller
    should never have to remember to resend anything. */
-if(S.mode === "owner" && canSeeOwner()) loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
+if(S.mode === "owner" && canSeeOwner()){
+  loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
+  if(S.tab === "people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
+}
 
 function resendIfPending(){
   if(S.status === "closed" && S.submittedAt && !S.sentAt) sendDay().then(() => render());
