@@ -6021,7 +6021,73 @@ function owner_week(){
         </button>`).join("")}
       </div>
     </div>` : ""}
+    ${caughtCard()}
     <div class="hint">Only days that reached the shop are counted here, which is why the sheets line is next to the money.</div>
+  </div>`;
+}
+
+/* ---------------------------------------------------------------
+   What PackOut caught this month.
+
+   A month's worth of what would have gone missing on paper, in the shop's own
+   records: days packed and never counted up, second sheets, fixes asked,
+   money the shop owes back that now travels with the day instead of being
+   remembered, big orders written down, and how many sheets reached the shop
+   the same day.
+
+   Counts only. It never says "saved $X" - nobody can prove that, and a number
+   nobody can prove is worth less than nothing to the person reading it.
+   --------------------------------------------------------------- */
+const CAUGHT_DAYS = 30;
+
+function caughtThisMonth(){
+  const from = localDay(daysAgo(CAUGHT_DAYS)), today = todayStamp();
+  const inWindow = s => s >= from && s <= today;
+  const days = PAST.days.filter(d => inWindow(d.day_date));
+  const never = PAST.unfinished.filter(u => inWindow(u.day_date)
+    && !PAST.days.some(d => d.market_id === u.market_id && d.day_date === u.day_date));
+  const sameDay = days.filter(d => { const r = reachedOn(d); return r && r === d.day_date; }).length;
+  const fronted = days.reduce((a, d) => a + (Number(d.fronted) || 0), 0);
+  const driving = days.reduce((a, d) => a + (Number(d.driving_pay) || 0), 0);
+  const gas = days.reduce((a, d) => a + (Number(d.car_gas) || 0), 0);
+  return {
+    from, days: days.length,
+    never: never.length,
+    neverItems: never.reduce((a, u) => a + (Number(u.items_out) || 0), 0),
+    seconds: PAST.seconds.filter(x => inWindow(x.day_date)).length,
+    fixes: PAST.fixes.filter(f => inWindow(f.day_date)).length,
+    fronted, driving, gas, owedBack: fronted + driving + gas,
+    leads: days.filter(d => leadFrom(d.note)).length,
+    sameDay, sameDayPct: days.length ? Math.round(sameDay / days.length * 100) : null
+  };
+}
+
+function caughtCard(){
+  if(AUTH.demo) return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">What PackOut caught · example</div>
+      <p class="note">On a real sign-in this is a month of what the app caught that paper wouldn't: days never counted up, second sheets, fixes, money owed back to sellers, big orders written down. Counts only - it never claims money saved.</p>
+    </div>`;
+  if(!pastCanRead() || !PAST.on) return "";
+  const c = caughtThisMonth();
+  if(!c.days) return "";
+
+  const line = (k, v, sub) => `<div class="kv">
+      <span class="kv-k">${k}${sub ? `<span class="sub"> — ${sub}</span>` : ""}</span>
+      <span class="kv-v">${v}</span>
+    </div>`;
+  return `<div class="card">
+    <div class="card-hd"><div><h3>What PackOut caught</h3><div class="sub" style="margin-top:3px">The last 30 days · ${c.days} ${c.days === 1 ? "day" : "days"} sent in</div></div></div>
+    <div class="card-pad">
+      ${line("Packed, never counted up", c.never + (c.never === 1 ? " day" : " days"), c.neverItems ? c.neverItems + " items were out on them" : "")}
+      ${line("Second sheets caught", c.seconds)}
+      ${line("Fixes asked", c.fixes)}
+      ${line("Owed back, sent with the day", money2(c.owedBack), "own pocket " + money(c.fronted) + ", driving " + money(c.driving) + ", gas " + money(c.gas))}
+      ${line("Big orders written down", c.leads)}
+      ${line("Sheets in the same day", c.sameDayPct === null ? "—" : c.sameDayPct + "%")}
+    </div>
+    <div class="card-pad" style="border-top:1px solid var(--line)">
+      <p class="note">Only what the app recorded. No guesses at money saved.</p>
+    </div>
   </div>`;
 }
 
