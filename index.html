@@ -5896,6 +5896,135 @@ function leavesCard(){
   </div>`;
 }
 
+/* ---------------------------------------------------------------
+   Last week on one page.
+
+   Today shows today. Nobody should have to open forty-six market cards to
+   know how the week went, so this is the whole business for the last full
+   Monday-to-Sunday week: money in, items sold, what the crew took, how many
+   sheets came in against the rota, money in by day, and up to three things
+   worth a look - each one a tap through to the screen it came from.
+
+   Every figure is only what was sent in. A market whose sheet never arrived
+   is missing from the money as well as from the count, and the "sheets in"
+   line is there so that is never a surprise.
+   --------------------------------------------------------------- */
+function lastWeekRange(){
+  // Monday of this week, then back seven days: the last full week.
+  const t = new Date(TODAY), wd = t.getDay();          // 0 Sun ... 6 Sat
+  const backToMonday = wd === 0 ? 6 : wd - 1;
+  const thisMonday = new Date(t); thisMonday.setDate(t.getDate() - backToMonday);
+  const from = new Date(thisMonday); from.setDate(thisMonday.getDate() - 7);
+  const to = new Date(from); to.setDate(from.getDate() + 6);
+  return { from: localDay(from), to: localDay(to), fromDate: from, toDate: to };
+}
+
+function lastWeek(){
+  const r = lastWeekRange();
+  const days = PAST.days.filter(d => d.day_date >= r.from && d.day_date <= r.to);
+  let inn = 0, sold = 0, took = 0;
+  const byDay = {};
+  days.forEach(d => {
+    const other = (d.other_pays || []).reduce((x, o) => x + (Number(o.amount) || 0), 0);
+    const broughtIn = (Number(d.cash) || 0) + (Number(d.card) || 0) + other;
+    const gross = broughtIn + (Number(d.spent_from_till) || 0);
+    inn += broughtIn;
+    took += sentDayPay(d, gross).amount + (Number(d.fronted) || 0) + (Number(d.driving_pay) || 0) + (Number(d.car_gas) || 0);
+    sold += (d.day_counts || []).reduce((a, c) => a + Math.max(0, c.went_out - c.came_back - c.samples - c.damaged), 0);
+    byDay[d.day_date] = (byDay[d.day_date] || 0) + broughtIn;
+  });
+  // Market days on the rota that week, whether or not a sheet came in.
+  const crewAt = {};
+  (CATALOGUE.crew || []).forEach(c => { (crewAt[c.market] = crewAt[c.market] || []).push(c.person); });
+  let rotaDays = 0;
+  for(let i = 0; i < 7; i++){
+    const d = new Date(r.fromDate); d.setDate(r.fromDate.getDate() + i);
+    const wd = DAYS[d.getDay()];
+    rotaDays += MARKETS.filter(m => m.day === wd && (crewAt[m.id] || []).length).length;
+  }
+  return { r, days, inn, sold, took, byDay, sheets: days.length, rotaDays };
+}
+
+function weekWorthALook(w){
+  const out = [];
+  // A market running out, from the sellers' own notes over the last four weeks.
+  const ranOut = {};
+  PAST.days.filter(d => d.day_date >= localDay(daysAgo(28))).forEach(d => {
+    if(soldOutNote(d.note)) ranOut[d.market_id] = (ranOut[d.market_id] || 0) + 1;
+  });
+  const worst = Object.keys(ranOut).sort((a, b) => ranOut[b] - ranOut[a])[0];
+  if(worst && ranOut[worst] >= 2){
+    const m = mkt(worst) || { name: worst, day: "" };
+    out.push({ text: esc(m.name) + " ran out on " + ranOut[worst] + " of its last " + (DAY_FULL[m.day] ? DAY_FULL[m.day] + "s" : "days"), go: "markets", label: "Markets" });
+  }
+  const fixes = PAST.fixes.filter(f => f.day_date >= localDay(daysAgo(14)));
+  if(fixes.length) out.push({ text: fixes.length === 1 ? "A fix was asked for a day this fortnight" : fixes.length + " fixes were asked this fortnight", go: "envelopes", label: "Envelopes" });
+  const leads = realLeads().filter(l => l.mark === "new");
+  if(leads.length) out.push({ text: leads.length === 1 ? "1 big order nobody has called yet" : leads.length + " big orders nobody has called yet", go: "leads", label: "Big orders" });
+  const never = PAST.unfinished.filter(u => !PAST.days.some(d => d.market_id === u.market_id && d.day_date === u.day_date));
+  if(never.length) out.push({ text: never.length === 1 ? "A day was packed and never counted up" : never.length + " days were packed and never counted up", go: "today", label: "Today" });
+  return out.slice(0, 3);
+}
+
+function owner_week(){
+  const head = note => `<div>
+      <h1 class="page">Last week</h1>
+      <p class="note" style="margin-top:5px">${note}</p>
+    </div>`;
+  if(AUTH.demo) return `<div class="pad stack">
+    ${head("Monday to Sunday on one page: money in, items sold, what the crew took, how many sheets came in against the rota, and up to three things worth a look.")}
+    <div class="card card-pad stripe stripe-warn"><div class="lbl">Example</div>
+      <p class="note" style="margin-top:6px">Nothing in the look-around is real. On a real sign-in this fills in from last week's sheets.</p></div>
+  </div>`;
+  if(!PAST.on) return `<div class="pad stack">
+    ${head(PAST.failed ? "Couldn't get your days from the shop. It's usually signal - try again in a moment." : "Loading…")}
+    ${PAST.failed ? `<button class="btn btn-quiet btn-sm" data-act="past-retry" style="width:auto">Try again</button>` : ""}
+  </div>`;
+
+  const w = lastWeek();
+  const span = fmtShort(w.r.fromDate) + " – " + fmtShort(w.r.toDate);
+  if(!w.sheets) return `<div class="pad stack">
+    ${head(span + ". No sheets came in that week" + (w.rotaDays ? ", against " + w.rotaDays + " market days on the rota." : "."))}
+    <div class="card card-pad"><p class="note">Every day a seller sends lands here the week after. Nothing is missing on purpose — there is simply nothing yet.</p></div>
+  </div>`;
+
+  const most = Math.max(...Object.values(w.byDay), 1);
+  const look = weekWorthALook(w);
+  return `<div class="pad stack">
+    ${head(span)}
+    <div class="tiles">
+      <div class="tile"><div class="lbl">Money in</div><div class="mid">${money(w.inn)}</div></div>
+      <div class="tile"><div class="lbl">Items sold</div><div class="mid">${w.sold.toLocaleString()}</div></div>
+      <div class="tile"><div class="lbl">Crew took</div><div class="mid">${money(w.took)}</div></div>
+      <div class="tile"><div class="lbl">Sheets in</div><div class="mid">${w.sheets}${w.rotaDays ? ` <span class="sub">of ${w.rotaDays}</span>` : ""}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><h3>Money in by day</h3></div>
+      <div class="card-pad">
+        ${[0,1,2,3,4,5,6].map(i => {
+          const d = new Date(w.r.fromDate); d.setDate(w.r.fromDate.getDate() + i);
+          const stamp = localDay(d), v = w.byDay[stamp] || 0;
+          return `<div class="kv">
+            <span class="kv-k" style="min-width:74px">${esc(DAY_FULL[DAYS[d.getDay()]])}</span>
+            <span class="bar" style="flex:1;margin:0 10px"><i style="width:${v ? Math.max(2, Math.round(v / most * 100)) : 0}%"></i></span>
+            <span class="kv-v">${v ? money(v) : "—"}</span>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
+    ${look.length ? `<div class="card">
+      <div class="card-hd"><h3>Worth a look</h3><span class="pill">${look.length}</span></div>
+      <div class="crewlist">
+        ${look.map(x => `<button class="crewrow" data-tab="${x.go}">
+          <span class="crewrow-l"><span class="who" style="font-weight:500">${x.text}</span></span>
+          <span class="sub">${esc(x.label)} ›</span>
+        </button>`).join("")}
+      </div>
+    </div>` : ""}
+    <div class="hint">Only days that reached the shop are counted here, which is why the sheets line is next to the money.</div>
+  </div>`;
+}
+
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
@@ -6065,8 +6194,8 @@ const SELLER_SCREENS = { today:[scr_today,foot_today], loadout:[scr_loadout,foot
   market:[scr_market,foot_market],
   closeout:[scr_closeout,foot_closeout], result:[scr_result,null] };
 
-const OWNER_TABS = [["today","Today"],["envelopes","Envelopes"],["leads","Big orders"],["send","Send list"],["people","People"],["markets","Markets"]];
-const OWNER_SCREENS = { today:owner_today, envelopes:owner_envelopes, leads:owner_leads, send:owner_send, people:owner_people, markets:owner_markets };
+const OWNER_TABS = [["today","Today"],["week","Last week"],["envelopes","Envelopes"],["leads","Big orders"],["send","Send list"],["people","People"],["markets","Markets"]];
+const OWNER_SCREENS = { today:owner_today, week:owner_week, envelopes:owner_envelopes, leads:owner_leads, send:owner_send, people:owner_people, markets:owner_markets };
 
 /* The sticky footer is fixed, so it sits outside the flow and reserves no room
    on its own. Its height changes with the screen -- one button on Today, two
@@ -6243,7 +6372,7 @@ document.addEventListener("click", e => {
     S.mode="owner"; render();
     loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
     if(S.tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(["leads","envelopes","markets","send"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send"].indexOf(S.tab)>=0) render(); });
+    if(["leads","envelopes","markets","send","week"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send","week"].indexOf(S.tab)>=0) render(); });
     return;
   }
 
@@ -6252,7 +6381,7 @@ document.addEventListener("click", e => {
     S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
     if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
     if(tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(["leads","envelopes","markets","send"].indexOf(tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send"].indexOf(S.tab)>=0) render(); });
+    if(["leads","envelopes","markets","send","week"].indexOf(tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send","week"].indexOf(S.tab)>=0) render(); });
     return;
   }
 
@@ -6707,7 +6836,7 @@ verifySent();
 if(S.mode === "owner" && canSeeOwner()){
   loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
   if(S.tab === "people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-  if(["leads","envelopes","markets","send"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send"].indexOf(S.tab)>=0) render(); });
+  if(["leads","envelopes","markets","send","week"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets","send","week"].indexOf(S.tab)>=0) render(); });
 }
 
 function resendIfPending(){
