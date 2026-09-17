@@ -5157,6 +5157,197 @@ async function crewTapNow(name, arg){
 
 document.addEventListener("input", e => { if(e.target && e.target.dataset && e.target.dataset.crew) crewInput(e.target); });
 
+/* ---------------------------------------------------------------
+   Real days from before today, for the owner.
+
+   Every owner screen except Today was worked from made-up days. The real
+   ones were already in the database and nothing read them: Today asks for
+   today's date only, and the next morning a day - and anything written on it,
+   like a customer asking about a wedding - was gone from every screen.
+
+   This reads the last eight weeks once, for the business the phone is signed
+   in to (so the sandbox only ever sees Test Kitchen). The look-around demo
+   reads nothing. Receipt photos are left out on purpose: one Saturday carried
+   180KB of them, and no report needs them.
+   --------------------------------------------------------------- */
+const PAST_WEEKS = 8;
+const PAST = { on:false, failed:false, loadedAt:0, from:null, to:null, days:[], fixes:[], seconds:[], unfinished:[], marks:[], marksOn:false };
+let PAST_LOADING = null;
+
+function pastCanRead(){ return !AUTH.demo && AUTH.role === "owner" && !!AUTH.business; }
+
+function loadRealPast(force){
+  if(!pastCanRead()) return Promise.resolve(false);
+  // One read at a time, and not again within a minute unless asked.
+  if(PAST_LOADING) return PAST_LOADING;
+  if(!force && PAST.on && Date.now() - PAST.loadedAt < 60000) return Promise.resolve(true);
+  PAST_LOADING = (async () => {
+    try{
+      const tok = await ensureSession();
+      if(!tok){ PAST.failed = true; return false; }
+      const to = todayStamp(), from = localDay(daysAgo(PAST_WEEKS * 7));
+      const biz = "?business_id=eq." + encodeURIComponent(AUTH.business);
+      const range = "&day_date=gte." + from + "&day_date=lte." + to;
+      const get = path => fetch(CLOUD.url + "/rest/v1/" + path, { headers: cloudHeaders() });
+      const [d, f, s, u, k] = await Promise.all([
+        get("market_days" + biz + range
+          + "&select=id,market_id,market_name,day_date,seller_id,seller_name,cash,card,other_pays,spent_from_till,"
+          + "chips_sold,discounts,fronted,driving_pay,car_gas,travel,note,submitted_at,pay_base,pay_rate,"
+          + "day_counts(product_id,went_out,came_back,samples,damaged)"
+          + "&order=day_date.desc,submitted_at.desc"),
+        get("day_corrections" + biz + range + "&select=id,market_id,day_date,seller_id,seller_name,message,asked_at&order=day_date.desc"),
+        get("second_sheets" + biz + range + "&select=id,market_id,day_date,seller_id,seller_name,sender_name,refused_at&order=day_date.desc"),
+        get("unfinished_days" + biz + range + "&select=*&order=day_date.desc"),
+        // Called / Won / Lost (db/040). Newest first, so the first one per day is where it stands.
+        get("lead_marks" + biz + "&select=market_day_id,mark,marked_at&order=marked_at.desc")
+      ]);
+      /* Before db/038 a day has no pay_base column and the whole read is a 400.
+         Every report still has to work, the old way, so ask again without it. */
+      let days = d;
+      if(d.status === 400) days = await get("market_days" + biz + range
+          + "&select=id,market_id,market_name,day_date,seller_id,seller_name,cash,card,other_pays,spent_from_till,"
+          + "chips_sold,discounts,fronted,driving_pay,car_gas,travel,note,submitted_at,"
+          + "day_counts(product_id,went_out,came_back,samples,damaged)"
+          + "&order=day_date.desc,submitted_at.desc");
+      if(!days.ok){ PAST.failed = true; return false; }
+      PAST.days = await days.json();
+      PAST.fixes = f.ok ? await f.json() : [];
+      PAST.seconds = s.ok ? await s.json() : [];
+      PAST.unfinished = u.ok ? await u.json() : [];
+      // Before db/040 there is no table: the list still shows, with nothing to mark.
+      PAST.marksOn = k.ok;
+      PAST.marks = k.ok ? await k.json() : [];
+      PAST.from = from; PAST.to = to;
+      PAST.on = true; PAST.failed = false; PAST.loadedAt = Date.now();
+      return true;
+    }catch(e){ PAST.failed = true; return false; }
+    finally{ PAST_LOADING = null; }
+  })();
+  return PAST_LOADING;
+}
+
+/* ---------------------------------------------------------------
+   Big-order leads.
+
+   Sellers are asked "Anyone ask about a big order?" at every count-up, and
+   the answer travels in the day's note as "Big order: ...". It showed on that
+   day's card on Today and nowhere else, so a customer asking about 300 packs
+   for a wedding was gone from Nawid's screens by the next morning.
+   --------------------------------------------------------------- */
+function leadFrom(note){
+  const t = String(note || "");
+  // The app writes the lead last, but a seller's own note could also say
+  // "Big order:" - the last one is the answer to the question.
+  const i = t.lastIndexOf("Big order:");
+  if(i < 0) return null;
+  const text = t.slice(i + "Big order:".length).trim();
+  return text || null;
+}
+// The first US phone number in the lead, as digits for a call or a text.
+function leadPhone(text){
+  const m = String(text || "").match(/(?:\+?1[\s.-]?)?\(?(\d{3})\)?[\s.-]?(\d{3})[\s.-]?(\d{4})(?!\d)/);
+  return m ? "+1" + m[1] + m[2] + m[3] : null;
+}
+function leadMark(dayId){
+  const m = PAST.marks.find(x => x.market_day_id === dayId);
+  return m ? m.mark : "new";
+}
+function realLeads(){
+  return PAST.days
+    .map(d => ({ day: d, text: leadFrom(d.note) }))
+    .filter(x => x.text)
+    .map(x => ({
+      id: x.day.id, text: x.text, phone: leadPhone(x.text),
+      date: x.day.day_date, market: (mkt(x.day.market_id) || {}).name || x.day.market_name || x.day.market_id,
+      seller: nameOf(x.day) || "A seller",
+      mark: leadMark(x.day.id),
+      markedAt: (PAST.marks.find(m => m.market_day_id === x.day.id) || {}).marked_at || null
+    }));
+}
+
+function owner_leads(){
+  const title = n => `<div>
+      <h1 class="page">Big orders</h1>
+      <p class="note" style="margin-top:5px">${n}</p>
+    </div>`;
+
+  if(AUTH.demo) return `<div class="pad stack">
+    ${title("Every time a seller writes down a customer asking about a big order, it shows up here - with a Call and a Text button when there's a number in it.")}
+    <div class="card card-pad stripe stripe-warn">
+      <div class="lbl">Example</div>
+      <p class="note" style="margin-top:6px">Nothing is real in the look-around. A lead looks like this:</p>
+    </div>
+    ${leadCard({ id:"example", text:"Office party, about 80 packs, first week of October. (510) 555-0192", phone:null, date:null, market:"A Saturday market", seller:"A seller" }, true)}
+  </div>`;
+
+  if(!PAST.on) return `<div class="pad stack">
+    ${title(PAST.failed ? "Couldn't get your days from the shop. It's usually signal - try again in a moment." : "Loading the last " + PAST_WEEKS + " weeks…")}
+    ${PAST.failed ? `<button class="btn btn-quiet btn-sm" data-act="past-retry" style="width:auto">Try again</button>` : ""}
+  </div>`;
+
+  const leads = realLeads();
+  const since = fmtShort(new Date(PAST.from + "T12:00:00"));
+  if(!leads.length) return `<div class="pad stack">
+    ${title("None in the last " + PAST_WEEKS + " weeks (since " + since + ").")}
+    <div class="card card-pad">
+      <p class="note">When a customer asks about catering or a big order, the seller writes it down at count-up under <b>Anyone ask about a big order?</b> It shows up here the moment their day is sent.</p>
+    </div>
+  </div>`;
+
+  const open = leads.filter(l => l.mark === "new" || l.mark === "called");
+  const done = leads.filter(l => l.mark === "won" || l.mark === "lost");
+  const fresh = open.filter(l => l.mark === "new").length;
+  return `<div class="pad stack">
+    ${title(PAST.marksOn
+      ? (open.length ? (fresh + " new" + (open.length - fresh ? ", " + (open.length - fresh) + " called" : "") + ". ") : "Every lead is dealt with. ")
+        + "Marked Won or Lost, a lead moves to the bottom."
+      : leads.length + (leads.length === 1 ? " lead" : " leads") + " in the last " + PAST_WEEKS + " weeks, newest first.")}
+    ${LEAD_ERR ? `<div class="card card-pad stripe stripe-warn"><p class="note">${esc(LEAD_ERR)}</p></div>` : ""}
+    ${open.map(l => leadCard(l, false)).join("")}
+    ${done.length ? `<div class="lbl" style="margin-top:8px">Dealt with</div>${done.map(l => leadCard(l, false)).join("")}` : ""}
+  </div>`;
+}
+
+function leadCard(l, example){
+  const when = l.date ? new Date(l.date + "T12:00:00").toLocaleDateString(undefined, { weekday:"short", month:"short", day:"numeric" }) : "";
+  return `<div class="card card-pad stack-sm stripe stripe-live">
+    <div class="sub">${[when, esc(l.market), esc(l.seller)].filter(Boolean).join(" · ")}</div>
+    <p style="margin:0;white-space:pre-wrap">“${esc(l.text)}”</p>
+    ${l.phone && !example && (l.mark === "new" || l.mark === "called") ? `<div class="row" style="gap:8px">
+      <a class="btn btn-sm" href="tel:${l.phone}" style="flex:1;text-align:center;text-decoration:none">Call</a>
+      <a class="btn btn-quiet btn-sm" href="sms:${l.phone}" style="flex:1;text-align:center;text-decoration:none">Text</a>
+    </div>` : ""}
+    ${!example && PAST.marksOn ? `<div class="seg">
+      ${[["called","Called"],["won","Won"],["lost","Lost"]].map(([k, label]) =>
+        /* The action is in the name: tapping the one already chosen puts the
+           lead back to new, so the button that does that is a different button. */
+        `<button class="btn btn-quiet btn-sm" data-act="lead-${l.mark === k ? "new" : k}:${esc(l.id)}" aria-pressed="${l.mark === k}" style="flex:1">${LEAD_BUSY === l.id ? "…" : label}</button>`
+      ).join("")}
+    </div>` : ""}
+  </div>`;
+}
+
+/* Marking a lead. Each tap is a new row in lead_marks (db/040); the newest
+   one is where the lead stands. One tap at a time, like the crew screen. */
+let LEAD_BUSY = null, LEAD_ERR = "";
+async function leadTap(act){
+  const m = act.match(/^lead-(new|called|won|lost):(.+)$/);
+  if(!m || !pastCanRead() || LEAD_BUSY) return;
+  const [, mark, dayId] = m;
+  LEAD_BUSY = dayId; LEAD_ERR = ""; render();
+  const r = await crewWrite("POST", "lead_marks",
+    { id: newId(), business_id: AUTH.business, market_day_id: dayId, mark }, true);
+  if(r.ok){
+    // Put it on the screen straight away; the next read confirms it.
+    PAST.marks.unshift({ market_day_id: dayId, mark, marked_at: new Date().toISOString() });
+  } else {
+    LEAD_ERR = r.msg;
+    if(r.unsure) await loadRealPast(true);
+  }
+  LEAD_BUSY = null;
+  render();
+}
+
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
@@ -5324,8 +5515,8 @@ const SELLER_SCREENS = { today:[scr_today,foot_today], loadout:[scr_loadout,foot
   market:[scr_market,foot_market],
   closeout:[scr_closeout,foot_closeout], result:[scr_result,null] };
 
-const OWNER_TABS = [["today","Today"],["send","Send list"],["people","People"],["markets","Markets"]];
-const OWNER_SCREENS = { today:owner_today, send:owner_send, people:owner_people, markets:owner_markets };
+const OWNER_TABS = [["today","Today"],["leads","Big orders"],["send","Send list"],["people","People"],["markets","Markets"]];
+const OWNER_SCREENS = { today:owner_today, leads:owner_leads, send:owner_send, people:owner_people, markets:owner_markets };
 
 /* The sticky footer is fixed, so it sits outside the flow and reserves no room
    on its own. Its height changes with the screen -- one button on Today, two
@@ -5489,6 +5680,8 @@ document.addEventListener("click", e => {
   }
 
   if(t.dataset.act==="market-close"){ S.marketOpen=null; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.act==="past-retry"){ loadRealPast(true).then(()=>render()); render(); return; }
+  if(t.dataset.act && t.dataset.act.indexOf("lead-") === 0){ leadTap(t.dataset.act); return; }
 
   if(t.id==="m-seller"){ S.mode="seller"; S.marketOpen=null; render(); return; }
   if(t.id==="m-owner"){
@@ -5496,6 +5689,7 @@ document.addEventListener("click", e => {
     S.mode="owner"; render();
     loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
     if(S.tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
+    if(S.tab==="leads") loadRealPast().then(()=>{ if(S.mode==="owner" && S.tab==="leads") render(); });
     return;
   }
 
@@ -5504,6 +5698,7 @@ document.addEventListener("click", e => {
     S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
     if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
     if(tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
+    if(tab==="leads") loadRealPast().then(()=>{ if(S.mode==="owner" && S.tab==="leads") render(); });
     return;
   }
 
@@ -5958,6 +6153,7 @@ verifySent();
 if(S.mode === "owner" && canSeeOwner()){
   loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
   if(S.tab === "people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
+  if(S.tab === "leads") loadRealPast().then(()=>{ if(S.mode==="owner" && S.tab==="leads") render(); });
 }
 
 function resendIfPending(){
