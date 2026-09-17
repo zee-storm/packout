@@ -4151,6 +4151,8 @@ function owner_market(mid){
       <p class="note" style="margin-top:5px">${esc(DAY_FULL[m.day])}s &middot; ${m.hours ? esc(m.hours) : m.evening ? esc(SHOP.eveningHours) : `about ${SHOP.sellHrs} hours`} &middot; stall fee ${money(feeOf(m))}${feeKnown(m)?"":GUESS}</p>
     </div>
 
+    ${sendAdviceCard(mid)}
+
     <div class="card card-pad stripe stripe-warn">
       <div class="lbl">Sample figures</div>
       <p class="note" style="margin-top:6px">The day-by-day list below is made up, so you can see the shape of it.
@@ -5615,6 +5617,105 @@ function paperworkCard(){
     </div>
     ${p.quiet ? `<div class="card-pad" style="border-top:1px solid var(--line)"><p class="note">${p.quiet} other ${p.quiet === 1 ? "market" : "markets"} sent everything on time — nothing to sort out.</p></div>` : ""}
     ${notOnApp}
+  </div>`;
+}
+
+/* ---------------------------------------------------------------
+   Send more, send less.
+
+   What to put in the cooler for a market has been worked from made-up days
+   since the first screen was drawn. The real counts are in the database: what
+   went out, what sold, what came back, what came back damaged. Running out at
+   eleven turns customers away for the rest of the market; half a flavour
+   riding back means thawing and damage.
+
+   The words are the app's, the numbers are the owner's call - it says More,
+   About right or Fewer and never picks a quantity.
+
+   Where the lines are drawn, said on the screen so anyone can check them:
+     More        nothing came back on half the days or more - it ran out.
+     Fewer       more than one in four comes back, on average.
+     About right anything in between.
+   Under three days at a market it says so instead of guessing.
+   --------------------------------------------------------------- */
+const SEND_MIN_DAYS = 3;
+const SEND_BACK_HIGH = 0.25;    // more than a quarter back: send fewer
+const SEND_RANOUT = 0.5;        // ran out on half the days or more: send more
+
+function soldOutNote(note){
+  const m = String(note || "").match(/Sold out(?: at ([^\n]+))?/i);
+  return m ? { at: (m[1] || "").trim() || null } : null;
+}
+
+function sendAdvice(mid){
+  const days = PAST.days.filter(d => d.market_id === mid && (d.day_counts || []).length);
+  if(days.length < SEND_MIN_DAYS) return { few: true, have: days.length };
+  const per = {};
+  days.forEach(d => (d.day_counts || []).forEach(c => {
+    const a = per[c.product_id] = per[c.product_id] || { out:0, back:0, samples:0, damaged:0, days:0, empty:0 };
+    a.out += c.went_out; a.back += c.came_back; a.samples += c.samples; a.damaged += c.damaged;
+    a.days++; if(c.went_out > 0 && c.came_back === 0) a.empty++;
+  }));
+  const rows = Object.keys(per).map(pid => {
+    const a = per[pid], p = prod(pid) || { name: pid, kind: "tamale" };
+    const backShare = a.out ? a.back / a.out : 0;
+    const ranOut = a.days ? a.empty / a.days : 0;
+    /* Whole numbers that add up on the screen. Rounding each average on its
+       own gave rows like took 6, sold 5, back 2. */
+    const took = Math.round(a.out / days.length);
+    const back = Math.round(a.back / days.length);
+    const spare = Math.round((a.samples + a.damaged) / days.length);
+    const sold = Math.max(0, took - back - spare);
+    /* A flavour that only went out once or twice here has nothing to say yet,
+       however it did on that day. */
+    const verdict = a.days < SEND_MIN_DAYS ? "Not enough days"
+      : ranOut >= SEND_RANOUT ? "More"
+      : backShare > SEND_BACK_HIGH ? "Fewer" : "About right";
+    return { pid, name: p.name, kind: p.kind, days: a.days,
+             out: took, sold, back, spare, damaged: a.damaged, backShare, ranOut, verdict };
+  }).sort((x, y) => {
+    const order = v => v === "More" ? 0 : v === "Fewer" ? 1 : v === "About right" ? 2 : 3;
+    return order(x.verdict) - order(y.verdict) || y.out - x.out;
+  });
+  const outs = days.map(d => soldOutNote(d.note)).filter(Boolean);
+  return { few:false, days: days.length, rows, soldOutDays: outs.length,
+           soldOutTimes: outs.map(o => o.at).filter(Boolean) };
+}
+
+function sendAdviceCard(mid){
+  if(AUTH.demo) return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">Send more, send less · example</div>
+      <p class="note">On a real sign-in this reads the real counts from this market's last few days and says, for each flavour, whether to send more, about the same, or fewer. Nothing in the look-around is real.</p>
+    </div>`;
+  if(!pastCanRead() || !PAST.on) return "";
+  const a = sendAdvice(mid);
+  if(a.few) return `<div class="card card-pad stack-sm">
+      <div class="lbl">Send more, send less</div>
+      <p class="note">${a.have ? a.have + (a.have === 1 ? " day" : " days") + " sent in from this market so far." : "No days sent in from this market yet."} It takes ${SEND_MIN_DAYS} before the counts mean anything, so there is nothing to say yet.</p>
+    </div>`;
+
+  const row = r => `<tr>
+    <td><div class="who">${esc(r.name)}</div>
+      ${r.damaged ? `<div class="sub">${r.damaged} came back damaged</div>` : ""}
+      ${r.verdict === "Not enough days" ? `<div class="sub">only ${r.days} ${r.days === 1 ? "day" : "days"} here</div>` : ""}</td>
+    <td class="n">${r.out}</td>
+    <td class="n">${r.sold}</td>
+    <td class="n">${r.back}</td>
+    <td class="n"><span class="pill pill-wrap ${r.verdict === "More" ? "pill-live" : r.verdict === "Fewer" ? "pill-warn" : r.verdict === "About right" ? "pill-good" : ""}">${r.verdict}</span></td>
+  </tr>`;
+  const tam = a.rows.filter(r => r.kind === "tamale"), sal = a.rows.filter(r => r.kind !== "tamale");
+  const times = [...new Set(a.soldOutTimes)];
+  return `<div class="card">
+    <div class="card-hd"><div><h3>Send more, send less</h3><div class="sub" style="margin-top:3px">An average day here, from the last ${a.days} sent in</div></div></div>
+    ${a.soldOutDays ? `<div class="card-pad" style="padding-bottom:0"><div class="insight"><div class="lbl">Ran out</div>
+      The seller said they sold out on <b>${a.soldOutDays} of the last ${a.days}</b>${times.length ? ", around " + esc(times.slice(0, 2).join(" and ")) : ""}.</div></div>` : ""}
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Flavour</th><th class="n">Took</th><th class="n">Sold</th><th class="n">Back</th><th class="n"></th></tr></thead>
+      <tbody>${tam.map(row).join("")}${sal.length ? `<tr><td colspan="5" class="lbl" style="padding-top:10px">Salsas</td></tr>` + sal.map(row).join("") : ""}</tbody>
+    </table></div>
+    <div class="card-pad" style="border-top:1px solid var(--line)">
+      <p class="note"><b>More</b> means nothing came back on half the days or more — it ran out, and people may have wanted more than went out. <b>Fewer</b> means more than one in four comes back. How many more or fewer is your call.</p>
+    </div>
   </div>`;
 }
 
