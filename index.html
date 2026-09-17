@@ -5365,8 +5365,15 @@ async function leadTap(act){
 const ENV_DAYS = 14;
 let ENV_OPEN = null;
 
-// Was this day paid on the shop's usual $150 because nobody set a day rate?
+/* Was this day paid on the shop's usual $150 because nobody set a day rate?
+
+   Only answerable when this phone actually has the shop's people list. A
+   checking phone signed in as somebody who isn't on the list never loads it,
+   and every day then looked like "no day rate set" - including the sellers
+   who have one. Better to say nothing than to say something wrong about
+   somebody's pay. */
 function rateGuessed(sid, mid){
+  if(CATALOGUE.source !== "saved") return false;
   const m = mid ? mkt(mid) : null;
   const over = (m && m.payBy) ? m.payBy[sid] : null;
   if(over && over.basePay != null) return false;
@@ -5487,6 +5494,130 @@ function owner_envelopes(){
   </div>`;
 }
 
+/* ---------------------------------------------------------------
+   Where the paperwork breaks.
+
+   Not who is to blame - which markets keep producing problems, so the setup
+   can be fixed instead of people chased. Each of these is a day the shop's
+   numbers were late, wrong or missing: a sheet that reached the shop the next
+   day, a fix asked for, two people at one stall both sending, a day packed and
+   never counted up, a rota day with no sheet at all.
+
+   A late sheet is nearly always bad signal, not a late seller, so it says
+   "reached the shop late" and never "sent late". "No sheet" can just mean the
+   market was rained out - the app has no way to know - so it asks rather than
+   tells. Grouped by market, never ranked by person.
+   --------------------------------------------------------------- */
+const PAPER_DAYS = 28;
+
+// The California date a sheet actually reached the shop.
+function reachedOn(row){
+  try{ return localDay(new Date(row.submitted_at)); }catch(e){ return null; }
+}
+
+function paperwork(){
+  const from = localDay(daysAgo(PAPER_DAYS)), today = todayStamp();
+  const inWindow = s => s >= from && s < today;          // today hasn't closed yet
+  const by = {};
+  const at = mid => (by[mid] = by[mid] || { late:0, fixes:0, seconds:0, never:0, noSheet:0, dates:[] });
+
+  const days = PAST.days.filter(d => inWindow(d.day_date));
+  days.forEach(d => {
+    const reached = reachedOn(d);
+    if(reached && reached > d.day_date) at(d.market_id).late++;
+  });
+  PAST.fixes.filter(f => inWindow(f.day_date)).forEach(f => at(f.market_id).fixes++);
+  PAST.seconds.filter(x => inWindow(x.day_date)).forEach(x => at(x.market_id).seconds++);
+
+  // Packed and never counted up, where no real day for that market and date
+  // ever arrived afterwards.
+  PAST.unfinished.filter(u => inWindow(u.day_date)).forEach(u => {
+    const landed = PAST.days.some(d => d.market_id === u.market_id && d.day_date === u.day_date);
+    if(!landed) at(u.market_id).never++;
+  });
+
+  /* A market day on the rota with no sheet at all. Only markets somebody is
+     rostered on, and only dates that have been and gone.
+
+     A market that has sent nothing at all in four weeks is a different thing:
+     it isn't paperwork breaking, it is a market not on the app yet. Listing
+     every one of those buried the real problems - in the sandbox it was thirty
+     cards of "no sheet" around three that mattered - so they are counted
+     together at the bottom instead. */
+  const crewAt = {};
+  (CATALOGUE.crew || []).forEach(c => { (crewAt[c.market] = crewAt[c.market] || []).push(c.person); });
+  const used = new Set(days.map(d => d.market_id));
+  for(let i = 1; i <= PAPER_DAYS; i++){
+    const d = daysAgo(i), stamp = localDay(d), wd = DAYS[d.getDay()];
+    if(!inWindow(stamp)) continue;
+    MARKETS.filter(m => m.day === wd && (crewAt[m.id] || []).length && used.has(m.id)).forEach(m => {
+      if(!days.some(x => x.market_id === m.id && x.day_date === stamp)) { const a = at(m.id); a.noSheet++; a.dates.push(stamp); }
+    });
+  }
+  const notOnTheApp = MARKETS.filter(m => (crewAt[m.id] || []).length && !used.has(m.id));
+
+  const list = Object.keys(by).map(mid => {
+    const a = by[mid], m = mkt(mid) || { name: mid, day: "" };
+    const shared = (crewAt[mid] || []).length > 1;
+    const bits = [];
+    if(a.seconds) bits.push(a.seconds + (a.seconds === 1 ? " second sheet" : " second sheets"));
+    if(a.fixes) bits.push(a.fixes + (a.fixes === 1 ? " fix asked" : " fixes asked"));
+    if(a.late) bits.push(a.late + " reached the shop late");
+    if(a.never) bits.push(a.never + " never counted up");
+    if(a.noSheet) bits.push(a.noSheet + (a.noSheet === 1 ? " day with no sheet" : " days with no sheet"));
+    // The one thing worth doing about it.
+    const step = a.seconds && shared ? "Two people send for this stall. Pick one to count."
+      : a.noSheet && !a.late && !a.fixes && !a.seconds && !a.never
+        ? (a.noSheet >= 3 ? "Is it still running? Or still done on paper?" : "Worth asking whether these ran.")
+      : a.never ? "A day was packed and never counted up. The count is still on that phone."
+      : a.late ? "Worth asking if the phone has signal where they count up."
+      : a.fixes ? "Worth a look at what keeps needing fixing."
+      : "";
+    return { mid, name: m.name, day: m.day, shared, bits, step, weight: a.seconds*3 + a.never*3 + a.fixes*2 + a.late + a.noSheet };
+  }).filter(x => x.bits.length).sort((a, b) => b.weight - a.weight);
+
+  const watched = new Set(Object.keys(crewAt).filter(mid => mkt(mid)));
+  return { list, notOnTheApp, quiet: Math.max(0, watched.size - list.length - notOnTheApp.length), from };
+}
+
+function paperworkCard(){
+  if(AUTH.demo) return `<div class="card card-pad stack-sm stripe stripe-warn">
+      <div class="lbl">Where the paperwork breaks · example</div>
+      <p class="note">On a real sign-in this lists the markets whose sheets keep arriving late, needing fixes, coming in twice, or not at all - with one thing worth doing about each. Nothing in the look-around is real.</p>
+    </div>`;
+  if(!pastCanRead()) return "";
+  if(!PAST.on) return `<div class="card card-pad stack-sm">
+      <div class="lbl">Where the paperwork breaks</div>
+      <p class="note">${PAST.failed ? "Couldn't get your days from the shop. It's usually signal." : "Loading the last four weeks…"}</p>
+      ${PAST.failed ? `<button class="btn btn-quiet btn-sm" data-act="past-retry">Try again</button>` : ""}
+    </div>`;
+
+  const p = paperwork();
+  const notOnApp = !p.notOnTheApp.length ? "" : `<div class="card-pad" style="border-top:1px solid var(--line)">
+      <div class="lbl">Not on the app yet</div>
+      <p class="note" style="margin-top:4px">${p.notOnTheApp.length} ${p.notOnTheApp.length === 1 ? "market has" : "markets have"} somebody on the rota but haven't sent a sheet at all in four weeks${p.notOnTheApp.length <= 4 ? " — " + p.notOnTheApp.map(m => esc(m.name) + " (" + esc(m.day) + ")").join(", ") : ""}. If they're running, those days are still on paper.</p>
+    </div>`;
+  if(!p.list.length) return `<div class="card">
+      <div class="card-hd"><div><h3>Where the paperwork breaks</h3><div class="sub" style="margin-top:3px">Last four weeks, by market.</div></div></div>
+      <div class="card-pad"><p class="note">Nothing to sort out: every market that sent a sheet sent it on the day, with no fixes and no second sheets.</p></div>
+      ${notOnApp}
+    </div>`;
+  return `<div class="card">
+    <div class="card-hd"><div><h3>Where the paperwork breaks</h3><div class="sub" style="margin-top:3px">Last four weeks, by market. Never by person.</div></div></div>
+    <div class="crewlist">
+      ${p.list.map(x => `<div class="crewrow" style="display:block;cursor:default">
+        <div class="who">${esc(x.name)} <span class="sub">${esc(DAY_FULL[x.day] ? DAY_FULL[x.day] + "s" : x.day)}${x.shared ? " · shared stall" : ""}</span></div>
+        <div class="chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px">
+          ${x.bits.map(b => `<span class="pill pill-wrap ${/second|fix|never/.test(b) ? "pill-warn" : ""}">${esc(b)}</span>`).join("")}
+        </div>
+        ${x.step ? `<p class="note" style="margin-top:6px">${esc(x.step)}</p>` : ""}
+      </div>`).join("")}
+    </div>
+    ${p.quiet ? `<div class="card-pad" style="border-top:1px solid var(--line)"><p class="note">${p.quiet} other ${p.quiet === 1 ? "market" : "markets"} sent everything on time — nothing to sort out.</p></div>` : ""}
+    ${notOnApp}
+  </div>`;
+}
+
 function owner_people(){
   const rows = SELLERS.map(s=>{
     const days = HISTORY.filter(d=>d.sellerId===s.id);
@@ -5599,6 +5730,7 @@ function owner_markets(){
       <h1 class="page">Markets</h1>
       <p class="note" style="margin-top:5px">Sorted by what each one actually pays per hour worked \u2014 including packing, driving both ways, setup and teardown. Not just the four hours of selling.</p>
     </div>
+    ${paperworkCard()}
     <div class="card card-pad stripe stripe-warn">
       <div class="lbl">Sample figures</div>
       <p class="note" style="margin-top:6px">Every number on this screen is worked from made-up days,
@@ -5832,7 +5964,7 @@ document.addEventListener("click", e => {
     S.mode="owner"; render();
     loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
     if(S.tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(S.tab==="leads" || S.tab==="envelopes") loadRealPast().then(()=>{ if(S.mode==="owner" && (S.tab==="leads" || S.tab==="envelopes")) render(); });
+    if(["leads","envelopes","markets"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets"].indexOf(S.tab)>=0) render(); });
     return;
   }
 
@@ -5841,7 +5973,7 @@ document.addEventListener("click", e => {
     S.tab=tab; S.marketOpen=null; render(); window.scrollTo(0,0);
     if(tab==="today") loadRealDays().then(()=>{ if(S.mode==="owner" && S.tab==="today") render(); });
     if(tab==="people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-    if(tab==="leads" || tab==="envelopes") loadRealPast().then(()=>{ if(S.mode==="owner" && (S.tab==="leads" || S.tab==="envelopes")) render(); });
+    if(tab==="leads" || tab==="envelopes" || tab==="markets") loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets"].indexOf(S.tab)>=0) render(); });
     return;
   }
 
@@ -6296,7 +6428,7 @@ verifySent();
 if(S.mode === "owner" && canSeeOwner()){
   loadRealDays().then(()=>{ if(S.mode==="owner") render(); });
   if(S.tab === "people") loadCrew().then(()=>{ if(S.mode==="owner" && S.tab==="people") { render(); if(CREW_UI.open) crewShowPanel(); } });
-  if(S.tab === "leads" || S.tab === "envelopes") loadRealPast().then(()=>{ if(S.mode==="owner" && (S.tab==="leads" || S.tab==="envelopes")) render(); });
+  if(["leads","envelopes","markets"].indexOf(S.tab)>=0) loadRealPast().then(()=>{ if(S.mode==="owner" && ["leads","envelopes","markets"].indexOf(S.tab)>=0) render(); });
 }
 
 function resendIfPending(){
