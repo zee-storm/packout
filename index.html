@@ -4629,11 +4629,12 @@ vsSum += (st.sold/peerAvg - 1);
 perHrSum += st.revenue/st.hrs;
 n++;
 });
+if(!n) return null;
 const vs = (vsSum/n)*100;
 const perHr = perHrSum/n;
 const y = yieldRecord(s.id);
 return { s, vs, perHr, per:y.per, fullPer:y.fullPer, n, days };
-}).sort((a,b)=>b.vs-a.vs);
+}).filter(Boolean).sort((a,b)=>b.vs-a.vs);
 const body = rows.map(r=>`<tr>
     <td><div class="who">${esc(r.s.name)}</div><div class="sub">${r.n} market days</div></td>
     <td class="n"><span class="delta ${r.vs>=0?"up":"down"}">${r.vs>=0?"+":""}${r.vs.toFixed(0)}%</span></td>
