@@ -2228,6 +2228,21 @@ function iphoneBrowserNote(){
   if(!IN_IPHONE_BROWSER || !AUTH.person || AUTH.demo) return "";
   return `<div class="hint">You're signed in to PackOut in this browser &mdash; keep using it here. Adding it to your Home Screen would need a new code from Nawid.</div>`;
 }
+const DEMO_WORD_HASH = "f4b9333c3fbef67173aaee4541ffa94073c9eaea6289a995dcf09b12e0150920";
+async function isDemoWord(typed){
+  const word = String(typed || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if(!word || !(window.crypto && crypto.subtle)) return false;
+  try{
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(word));
+    const hex = [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+    return hex === DEMO_WORD_HASH;
+  }catch(e){ return false; }
+}
+function startDemo(){
+  AUTH.demo = true; saveAuth(); S.codeError = null;
+  if(CATALOGUE.source !== "demo"){ save(); location.replace(location.pathname); return; }
+  render(); window.scrollTo(0,0);
+}
 function scr_whoami(){
   const err = S.codeError;
   const installFirst = IN_IPHONE_BROWSER && !S.codeAnyway;
@@ -2262,7 +2277,6 @@ function scr_whoami(){
       No password, and nothing to remember. The code stops working after you
       use it, so passing it on gets nobody anything.
     </div>
-    <button class="btn btn-quiet" data-act="demo">Just having a look</button>
   </div>`;
 }
 function coverPicker(){
@@ -4964,6 +4978,7 @@ const tries = codeCandidates(S.codeTyped);
 if(!tries.length){ S.codeError="Type the code Nawid gave you."; render(); return; }
 S.codeError = "Checking\u2026"; render();
 (async () => {
+if(await isDemoWord(S.codeTyped)) return { demo:true };
 let res = null;
 for(const c of tries){
 res = await redeemCode(c);
@@ -4973,6 +4988,7 @@ if(!res.ok && res.invalid && tries[0].length !== 6)
 res.msg = "A code is 6 letters and numbers \u2014 check what you typed. If it still doesn't work, ask Nawid for a new one.";
 return res;
 })().then(res => {
+if(res.demo){ S.codeTyped = ""; startDemo(); return; }
 if(res.ok){
 takePhone(AUTH.person); S.codeError = null; S.codeTyped = "";
 MY_MARKET = pickMyMarket(); MY_REC = recommendMarket(MY_MARKET.id);
@@ -4996,11 +5012,7 @@ render(); window.scrollTo(0,0);
 return;
 }
 if(t.dataset.act==="code-anyway"){ S.codeAnyway = true; render(); return; }
-if(t.dataset.act==="demo"){
-AUTH.demo = true; saveAuth(); S.codeError=null;
-if(CATALOGUE.source !== "demo"){ save(); location.replace(location.pathname); return; }
-render(); window.scrollTo(0,0); return;
-}
+if(t.dataset.act==="demo"){ startDemo(); return; }
 if(t.dataset.act==="install-app"){
 const offer = INSTALL_OFFER; INSTALL_OFFER = null;
 if(!offer) return;
