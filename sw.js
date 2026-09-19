@@ -1,4 +1,4 @@
-const CACHE = "packout-8680ba87";
+const CACHE = "packout-af2e1f69";
 const FONT_HOSTS = ["https://fonts.googleapis.com", "https://fonts.gstatic.com"];
 const SHELL = [
 "./",
